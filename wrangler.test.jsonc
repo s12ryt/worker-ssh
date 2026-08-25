@@ -1,0 +1,33 @@
+// 測試專用 wrangler 設定：main 直接指向原始碼，讓 TDD 不需重建 dist
+// 正式部署仍使用 wrangler.jsonc（main=dist/worker/index.js）
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "worker-ssh-test",
+  "main": "src/worker/index.ts",
+  "compatibility_date": "2026-08-01",
+  "kv_namespaces": [
+    { "binding": "KV", "id": "REPLACE_WITH_YOUR_KV_NAMESPACE_ID" }
+  ],
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "worker-ssh-test",
+      "database_id": "00000000-0000-0000-0000-000000000001",
+      "preview_database_id": "worker-ssh-vitest"
+    }
+  ],
+  "durable_objects": {
+    "bindings": [
+      { "name": "SSH_SESSIONS", "class_name": "SshSessionObject" },
+      { "name": "SSH_QUOTA", "class_name": "SshQuotaObject" }
+    ]
+  },
+  "migrations": [
+    { "tag": "v1", "new_sqlite_classes": ["SshSessionObject"] },
+    { "tag": "v2", "new_sqlite_classes": ["SshQuotaObject"] }
+  ],
+  "assets": {
+    "directory": "dist/client",
+    "binding": "ASSETS"
+  }
+}
