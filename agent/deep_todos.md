@@ -506,3 +506,18 @@
 - **發布結果**：公開 repository 建立於 `https://github.com/s12ryt/worker-ssh`。本輪只推送原始碼與 workflow，不觸發 production deployment；使用者需先在 GitHub Actions secrets 設定 `CLOUDFLARE_API_TOKEN`、`CLOUDFLARE_ACCOUNT_ID`、`PANEL_PASSWORD`、`ENCRYPTION_KEY`。
 - **遠端驗證**：`main` 已成功推送並設為 default branch；GitHub 將 **Deploy to Cloudflare** 辨識為 active workflow。目前 workflow runs 為空，repository secrets 清單為空，證明本輪未觸發部署且待使用者設定四個 secrets。
 - **服務狀態**：依使用者既有要求，本機 Wrangler `http://127.0.0.1:8787` 與 SSH fixture `127.0.0.1:2222` 保持運行，發布流程不讀取或停止本機服務。
+
+---
+
+## 任務 19：GitHub Actions npm lockfile 相容性修復（✅ 已完成 2026-08-25）
+
+- **來源與根因**：使用者提供手動 deployment run `32802591933` 的 `npm ci` 失敗紀錄。決定性重現證明 npm 10.9.4 會把 Wrangler 的 optional peer 視為 lock 缺少 `@cloudflare/workers-types@4.20260702.1`，同一份 lock 在 npm 11.7.0 可正常 clean install；不是根層 package 與 lock 版本不一致。
+- **TDD RED／GREEN**：
+  - [x] Deployment contract 先要求 `packageManager=npm@11.7.0`，以及 workflow 在 `npm ci` 前安裝並驗證 npm 11.7.0；RED 因契約缺失而失敗，GREEN 後通過。
+  - [x] 乾淨 worktree 暴露 Worker Vitest 的 ASSETS 指向未提交 `dist/client`；新增已提交 `test/fixtures/assets/index.html`、改測試 binding並加入 HTTP fallback test。
+  - [x] 乾淨 worktree 再暴露 backend Worker 靜態依賴未提交的 Go WASM；依使用者決策，workflow 改為 `npm ci` → typecheck → build／split →完整測試，不提交二進位也不新增 pretest 隱式建置。
+  - [x] Release contract 明確驗證 npm版本、步驟順序與測試assets fixture，防止後續回歸。
+- **Clean checkout 證據**：隔離 worktree `worker-ssh-npm11-ci-20260825` 真實執行 npm 11.7.0 `npm ci` 成功；依 Actions 順序執行 typecheck、build、check:split、npm test 全綠。Deployment 20/20、frontend 295/295、Worker 142/142、Go PASS；Worker 124.4KB、app約122KB、terminal約284.9KB。
+- **本機環境區分**：主工作區的實際 `npm ci` 因仍運行的 Wrangler 鎖住 Windows `node_modules` 而遭 EBUSY 並留下不完整安裝；未停止服務，而是用隔離 worktree取得clean-install證據。這不是 lockfile 或正式碼失敗。
+- **提交與遠端驗證**：`2d9bf5c` 建立自包含Worker測試、`a8918de`固定npm與workflow、`ef44dc3`同步文件，均已推送 `main`。遠端workflow顯示npm11 setup與build-before-test；Actions清單仍只有原手動失敗run `32802591933`，push未自動觸發production。
+- **環境與服務**：本機runtime仍有compatibility date fallback與Windows Miniflare temp EBUSY cleanup警告。Wrangler parent PID63648／listener PID48152持續服務 `http://127.0.0.1:8787`；SSH fixture PID27768持續監聽`127.0.0.1:2222`。

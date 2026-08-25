@@ -346,3 +346,14 @@
 - 教訓：(1)一鍵部署應把resource provisioning與deploy config生成拆成可單元測試的library；(2)公開測試fixture也不能內嵌private-key PEM，即使無真實權限仍可能觸發push protection；(3)workflow secrets應以ephemeral secrets file與always-cleanup處理，不應注入靜態wrangler config；(4)本機資料與正式部署資源必須明確隔離。
 - 服務：本機Wrangler與SSH fixture不受Git初始化、測試或發布影響，依使用者要求保持運行。
 
+## 2026-08-25 GitHub Actions npm lockfile 相容性修復（任務 19）
+
+- GitHub手動run `32802591933`在Node22附帶npm10執行`npm ci`時失敗。`npm@10.9.4 ci --dry-run`可本機重現缺少nested `@cloudflare/workers-types@4.20260702.1`，`npm@11.7.0`對同一lock可成功，根因是optional peer lock解析的npm major差異。
+- 使用者決策固定npm11.7.0，不以npm10重建lock，也不由本輪重跑production。`package.json`新增`packageManager`，workflow先安裝並精確驗證npm版本。
+- Clean checkout先後暴露兩個隱性依賴：(1) Worker ASSETS指向被忽略的`dist/client`；改用已提交的最小fixture並加入HTTP fallback測試。(2) Worker module靜態import Go WASM；二進位不得提交，因此workflow必須build/split後再跑Worker tests。
+- 主工作區Wrangler必須保持運行，Windows EBUSY使原地`npm ci`中斷並破壞node_modules。建立隔離worktree完成真實npm11 clean install與完整CI順序，避免把本機檔案鎖誤判成lock問題。
+- Clean驗證：deployment20、frontend295、Worker142、Go/typecheck/build/split全通過；compatibility date fallback與Miniflare temp EBUSY仍是既有環境警告。
+- 遠端`main`已包含`2d9bf5c`、`a8918de`、`ef44dc3`。GitHub workflow可見npm11 setup與build-before-test；run list仍只有原本workflow_dispatch失敗run，證明push沒有觸發Cloudflare部署。
+- 教訓：(1) `packageManager`與CI顯式npm版本必須同時固定，不能依賴setup-node附帶版本；(2)乾淨checkout是發現未提交fixture與generated artifact依賴的必要測試；(3)測試assets應自包含，正式generated WASM則由workflow顯式build，兩者不可混為同一種修法。
+- 服務確認：Wrangler parent63648/listener48152與SSH fixture27768保持運行，未為clean install或推送而停止。
+
