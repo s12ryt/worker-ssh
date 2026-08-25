@@ -50,7 +50,16 @@ export class FolderBrowserState {
 
   replaceScope(scope: FolderScopeView): void {
     const nextFolderId = scope.folder?.id ?? null;
-    if (nextFolderId !== this.currentFolderId) this.selected.clear();
+    if (nextFolderId !== this.currentFolderId) {
+      this.selected.clear();
+    } else {
+      // 同資料夾重拉清單（例如其他分頁同步後）：修剪已不在清單內的選取，
+      // 避免全選判定與計數把清單外的幽靈 id 算進去。
+      const visible = new Set(scope.connections.map((conn) => conn.id));
+      for (const id of this.selected) {
+        if (!visible.has(id)) this.selected.delete(id);
+      }
+    }
     this.currentFolderId = nextFolderId;
   }
 
@@ -63,7 +72,10 @@ export class FolderBrowserState {
     this.selected.clear();
   }
 
-  selectedConnectionIds(): string[] {
-    return [...this.selected];
+  /** 提供 visibleIds 時只回傳與當前清單的交集（顯示層雙保險）。 */
+  selectedConnectionIds(visibleIds?: readonly string[]): string[] {
+    if (!visibleIds) return [...this.selected];
+    const visible = new Set(visibleIds);
+    return [...this.selected].filter((id) => visible.has(id));
   }
 }

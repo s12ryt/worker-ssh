@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { FolderScopeView, FolderView } from "../../../src/shared/types";
+import type { ConnectionView, FolderScopeView, FolderView } from "../../../src/shared/types";
 import {
   FolderBrowserState,
   folderMoveTargets,
@@ -46,6 +46,21 @@ const ROOT_SCOPE: FolderScopeView = {
   connections: [],
 };
 
+function connView(id: string): ConnectionView {
+  return {
+    id,
+    folderId: null,
+    name: id,
+    host: "127.0.0.1",
+    port: 22,
+    username: "u",
+    authType: "password",
+    credentialState: "ready",
+    createdAt: 1,
+    updatedAt: 1,
+  };
+}
+
 describe("folder browser state", () => {
   it("根目錄 breadcrumb 固定顯示未分類，子資料夾沿 API breadcrumb 延伸", () => {
     expect(rootBreadcrumb(ROOT_SCOPE)).toEqual([{ id: null, name: "未分類" }]);
@@ -85,5 +100,38 @@ describe("folder browser state", () => {
       "other",
       "root",
     ]);
+  });
+
+  it("同資料夾重拉清單時，修剪已不在清單內的選取（跨分頁同步場景）", () => {
+    const state = new FolderBrowserState();
+    state.replaceScope({
+      ...ROOT_SCOPE,
+      connections: [connView("conn-a"), connView("conn-b")],
+    });
+    state.toggleConnection("conn-a", true);
+    state.toggleConnection("conn-b", true);
+
+    // 另一分頁把 conn-a 移走 → 本分頁重拉清單（folderId 不變）
+    state.replaceScope({
+      ...ROOT_SCOPE,
+      connections: [connView("conn-b")],
+    });
+
+    expect(state.selectedConnectionIds()).toEqual(["conn-b"]);
+  });
+
+  it("selectedConnectionIds 傳入可見清單時回傳交集（顯示層雙保險）", () => {
+    const state = new FolderBrowserState();
+    state.replaceScope({
+      ...ROOT_SCOPE,
+      connections: [connView("conn-a"), connView("conn-b")],
+    });
+    state.toggleConnection("conn-a", true);
+    state.toggleConnection("conn-b", true);
+
+    expect(
+      state.selectedConnectionIds(["conn-b", "conn-ghost"]),
+    ).toEqual(["conn-b"]);
+    expect(state.selectedConnectionIds()).toEqual(["conn-a", "conn-b"]);
   });
 });
