@@ -6,6 +6,7 @@ import {
   deleteConnection,
   deleteFolder,
   getBootstrapStatus,
+  getOs,
   getSettings,
   listConnections,
   listFolders,
@@ -195,5 +196,44 @@ describe("全域設定 API", () => {
         }),
       }),
     );
+  });
+});
+
+describe("getOs（OS 快取探測）", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("204 No Content（新 Worker 未命中）回 null 不拋錯", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(null, { status: 204 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(getOs("host:22")).resolves.toBeNull();
+  });
+
+  it("404（滾動部署期的舊 Worker 未命中）同樣回 null", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      Response.json({ error: "not found" }, { status: 404 }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(getOs("host:22")).resolves.toBeNull();
+  });
+
+  it("真正伺服器錯誤仍拋 ApiError", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      Response.json({ error: "boom" }, { status: 500 }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(getOs("host:22")).rejects.toMatchObject({ status: 500 });
+  });
+
+  it("命中時回傳 OsInfo", async () => {
+    const info = { os: "Ubuntu", version: "22.04", family: "linux" };
+    const fetchMock = vi.fn().mockResolvedValue(Response.json(info));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(getOs("host:22")).resolves.toEqual(info);
   });
 });

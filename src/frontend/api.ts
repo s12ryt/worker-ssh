@@ -210,7 +210,8 @@ export async function getOs(key: string): Promise<OsInfo | null> {
   const res = await fetch(`/api/os?key=${encodeURIComponent(key)}`, {
     credentials: "same-origin",
   });
-  if (res.status === 404) return null;
+  // 204 = 新 Worker 的快取未命中；404 = 滾動部署期的舊 Worker 未命中。兩者皆回 null。
+  if (res.status === 204 || res.status === 404) return null;
   if (!res.ok) {
     let message = `HTTP ${res.status}`;
     try {
