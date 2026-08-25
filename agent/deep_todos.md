@@ -546,7 +546,7 @@
 
 - **來源與決策**：使用者要求 (1) IPv6 主機支援＋自主疊代升級 SSH 連線速度；(2) 新增 `ssh -o` 附加選項與 Cloudflare Access 代理。完整契約見 `agent/question.md` 第二十二節（IPv6／速度）與第二十三節（-o／Access）。要點：IPv6 裸/方括號皆接受、連線時正規化、儲存原樣；驗收僅自動化測試；速度口徑=點擊連線→terminal 可輸入；優化全部授權；-o 白名單外儲存時 400 列名；ProxyCommand 僅 cloudflared access ssh 形態自動轉 Access；secret 加密儲存永不回傳；README 必須文件化。
 - **IPv6（TDD）**：
-  - [x] Worker：新增 `src/worker/ssh-host.ts` `normalizeSshHostname`（trim＋strip 成對方括號），`backend-ssh-do.ts` probe/connectSession 兩處接入；`test/unit/worker/ssh-host.test.ts` 5 測試。
+  - [x] Worker：新增 `src/worker/ssh-host.ts` `normalizeSshHostname`，`backend-ssh-do.ts` probe/connectSession 兩處接入；初版依當時自動化契約採 trim＋strip 成對方括號，後由任務 23 的真實 workerd 探針修正為 IPv6 literal 統一單層方括號；`test/unit/worker/ssh-host.test.ts` 5 測試。
   - [x] Go：`client.go` 新增 `normalizeHost`（同語意）修正 `JoinHostPort` 對 `[::1]` 產生 `[[::1]]:port`；`testserver_test.go` 參數化 `startTestServerOn`；`client_test.go` 新增 `[::1]` 原生 dial 與 bracketed/bare TOFU hostname 一致測試（skipIfNoIPv6Loopback）。
 - **-o 選項與 Access 代理（TDD，全鏈）**：
   - [x] shared：`src/shared/ssh-options.ts`（8 鍵白名單、值驗證、`parseAccessProxyCommand` tokenizer、`validateAccessProxy`／寬鬆 `validateAccessProxyShape`、`tokenizeCommand`、`SSH_HOST_CHARSET`）；20 測試。
@@ -587,3 +587,22 @@
 - **驗證**：前端全量 32 檔 314/314（+2 新）；typecheck 雙 tsconfig 綠；build PASS；check:split OK（app.js 131.6KB）。Playwright 復驗缺陷場景：重現步驟（勾選→API 移走一台→建資料夾觸發重拉）後全選框正確半選（原假全選）、計數 1 筆（原幽靈 2 筆）、「移動所選」只帶 1 台有效 id、全選/取消路徑正常；測試後環境已復原（loc 移回未分類、臨時資料夾刪除）。改動僅前端三檔，Worker/Go 不受影響。
 - **服務狀態**：wrangler dev（8787）與 dev-ssh-server（2222）全程保持運行；變更已隨任務 21 的 17 個提交一併推送（見任務 21「已推送」行）。
 - **後續調整（同日，使用者追問「已選取 0 筆為什麼 ui 還在」）**：選取 bar 顯示規則改為「只在選取數 > 0 時出現」——「全選本頁」checkbox 搬到「主機」section heading 右側群組（`.section-heading-side`，與台數計數同列，清單空時隱藏）；bar 內只剩計數＋移動/取消按鈕；renderSelectionBar 改 `count === 0` 隱藏 bar。TDD：settings-ui-contract.test.ts 新 describe 2 契約測試（selection-all 不在 bar 區段內且位於主機 heading；bar 只含計數與動作按鈕）RED→GREEN；移除 mobile 舊規則 `.selection-all-control { flex:1 }`（已不在 bar 內）。前端 32 檔 316/316、typecheck/build/check:split 全綠；Playwright 復驗四步（0 筆 bar 隱藏、勾 1 台 bar 出現半選、標題列全選 3 筆、取消 bar 消失且全選入口仍在）＋390px 手機版無水平溢出（scrollWidth 375 < 390）。決策記錄於 question.md 第二十四節「後續調整」。
+
+---
+
+## 任務 23：OS 快取未命中 404 噪音與 IPv6 實際連線修復（✅ 已完成 2026-08-26）
+
+- **來源與契約**：使用者先回報 production 首次連線時 `/api/os?key=...` 404 console 紅字，再回報 IPv6 SSH 主機仍無法連線。決策與驗收見 `agent/question.md` 第二十五、二十六節：OS cache miss 改 204；IPv6 必須以真實 workerd 探針補足任務 21 僅自動化測試的證據缺口。
+- **OS cache miss（TDD）**：
+  - [x] RED：Worker `index.test.ts` 改期望不存在 key 回 204，舊碼實際回 404；前端 `api.test.ts` 新增 getOs 204/404/500/hit 測試，舊碼對 204 執行 `res.json()` 而失敗。
+  - [x] GREEN：`handleOs` KV miss 回 `new Response(null, { status: 204 })`；`getOs` 對 204 與 404 都回 `null`，500 仍拋 `ApiError`。OsCache 不快取 null、SSH exec 偵測與 PUT 語意不變。
+- **IPv6 根因與修復（TDD）**：
+  - [x] 真實 probe：暫存 wrangler dev 8799＋雙棧 echo server 測 `cloudflare:sockets connect()`；`127.0.0.1` 成功、裸 `::1` 失敗、`[::1]` 成功並回 `[::1]:port`。確認 workerd 支援 IPv6，但 literal hostname 必須帶方括號。
+  - [x] RED：重寫 `ssh-host.test.ts` 契約；舊 `normalizeSshHostname` 對裸／括號／混亂括號輸入有 4 failed／1 passed，證明舊「去括號」方向錯誤。
+  - [x] GREEN：trim 後只要 host 含 `:`，移除所有 `[`／`]` 再輸出單層 `[inner]`；空 `[]` 原樣，IPv4／域名原樣。Go 端仍剝括號後交由 `net.JoinHostPort`，TOFU hostname 契約不變。
+- **App 級 IPv6 E2E**：
+  - [x] 暫存 Node TCP forwarder `[::1]:2299` → `127.0.0.1:2222`，透過真實 app API 建立 host=`::1` 的 `IPv6-E2E` 連線；API 儲存回應保留裸輸入。
+  - [x] UI 顯示 `tester@::1:2299`；點連線後 TOFU modal 正常取得 ssh-ed25519 指紋；信任後 terminal 顯示 fixture banner，輸入 `v6-echo-test` 成功回顯，證明從 Worker TCP connect、SSH handshake 到 terminal 可輸入全鏈通過。
+  - [x] 同場 console errors=0，OS KV miss 為 204；測試 connection DELETE 204，forwarder 與暫存檔已清理，既有 wrangler dev 8787／SSH fixture 2222 保持運行。
+- **文件與驗證**：README 與項目表已改為「IPv6 literal 連線時正規化為單層方括號」；目標測試 ssh-host 5/5、frontend api 10/10、Worker index 53/53，鄰近 backend-ssh-do+index 58/58。完整回歸：deployment 20/20、前端 32 檔 320/320、Worker 21 檔 201/201、Go `-count=1` PASS、typecheck 雙 tsconfig、build、check:split 與變更檔 LSP diagnostics 全綠（app.js 131.6KB、terminal 284.9KB）。Windows Miniflare 僅有既有 EBUSY 暫存清理警告，未影響結果與退出碼。
+- **發布狀態**：本輪未收到 commit／push／deploy 指示；production 仍為舊版本，需後續推送 main 並手動執行 `Deploy to Cloudflare` workflow 才會生效。

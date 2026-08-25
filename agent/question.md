@@ -834,3 +834,65 @@
 
 1. 決策（使用者已選）：**bar 只在選取數 > 0 時出現**；「全選本頁」checkbox 搬到「主機」區塊標題列（與台數計數同側），作為 0 筆時的全選入口；清單為空時全選控制一併隱藏。
 2. 驗收：(a) HTML contract 測試——selection-all 不在 selection-bar 區段內、位於主機 section heading；(b) main.ts renderSelectionBar 改「count === 0 隱藏 bar」+「connections.length === 0 隱藏全選控制」；(c) Playwright 復驗 0 筆 bar 消失、勾一台 bar 出現、標題列全選可用；(d) 回歸前端全量+typecheck+build+check:split。
+
+## 二十五、/api/os 快取未命中改回 204（2026-08-26）
+
+> 觸發：使用者回報 production（workers.dev）首次連線時 console 出現 `GET /api/os?key=host:port 404 (Not Found)` 紅字。調查確認：KV 未命中的快取探測（connectTo 預熱、detectOs、清單重繪）在未連線過的主機上必然 404——行為正常（getOs 視 404 為 null），但瀏覽器 console 對非 2xx 一律印紅字，造成錯誤假象；且 OsCache 不快取 null，未連線主機每次清單重繪都重複 404。
+
+### 已確認需求與決策
+
+1. 修法（使用者已選）：**Worker GET /api/os 未命中改回 204 No Content**（2xx、無 body、語意=快取探測未命中非錯誤）。
+2. 前端 `getOs` 同時容忍 204 與 404（滾動部署相容：新前端對舊 Worker 的 404、舊快取頁面對新 Worker 的 204 都回 null）。
+3. 偵測/重試語意不變：OsCache 仍不快取 null、detectOs 未命中仍走 SSH exec 偵測 + PUT；401/400 契約不變。
+4. /api/os 為 SPA 內部 API（非 README 公開契約），唯一消費者為自家前端，改動安全。
+
+### 可觀察行為與驗收條件
+
+1. TDD：Worker index.test.ts「GET 不存在的 key」改期望 204（RED：現碼回 404）；前端 api.test.ts 新 getOs describe（204→null、404→null 相容、500→throw ApiError）。
+2. handleOs GET 未命中回 `new Response(null, {status:204})`；api.ts getOs `res.status === 204 || res.status === 404` → null。
+3. 本機 dev 瀏覽器復驗：GET /api/os?key=不存在 → Network 顯示 204、console 無紅字。
+4. 回歸：Worker index.test.ts + 前端全量 + typecheck + build 全綠。
+
+## 二十六、IPv6 連線失敗修復：正規化方向反轉為加方括號（2026-08-26）
+
+> 觸發：使用者回報「ipv6 的 ssh 主機還是連不上」。任務 21 當時驗收決策為「僅自動化測試」，未實證 workerd TCP sockets 對 IPv6 的支援。本輪以獨立 probe worker（暫存 wrangler dev 8799 + 雙棧 echo server）實測 `cloudflare:sockets` connect() 行為，取得決定性證據。
+
+### 實測證據（workerd connect()）
+
+| hostname 輸入 | 結果 |
+| --- | --- |
+| `127.0.0.1` | ✅ 成功 |
+| 裸 `::1` | ❌ `proxy request failed, cannot connect to the specified address` |
+| `[::1]`（方括號） | ✅ 成功，`remoteAddress` 回報 `[::1]:port` |
+
+結論：workerd 支援 IPv6 出站連線，但 SocketAddress.hostname 的 IPv6 字面位址**必須帶方括號**（與 URL host 語意一致）。官方 TCP sockets 文檔（2026-06）未載明此行為。
+
+### 根因
+
+任務 21 的 `normalizeSshHostname` 把 `[::1]` 剝成裸 `::1`（方向錯誤）——所有 IPv6 字面位址（不論使用者輸入裸或括號形式）連線時都被轉成 workerd 拒絕的形式，必然失敗。
+
+### 已確認需求與決策
+
+1. 修法唯一（依實測證據）：正規化目標反轉——**含 `:` 的 host 視為 IPv6 字面位址，輸出一律為單層方括號形式**；混亂括號（`[::1`、`::1]`、`[[::1]]`）統一修成 `[::1]`；`[]`（空內容）原樣；IPv4/域名原樣。輸入端契約不變（裸/括號皆接受、儲存原樣）。
+2. Go 端不變：`normalizeHost` 剝括號後 `net.JoinHostPort` 自動加回 `[...]`，TOFU hostname 語意（`[::1]:port`）不變；Worker 傳給 Go 的 config.host 仍為原始輸入，兩端各自正規化。
+3. 純 IPv6 域名（如 AAAA-only hostname）：workerd 自行解析，無需前端處理；實測 localhost 情境已覆蓋字面位址路徑。
+
+### 可觀察行為與驗收條件
+
+1. TDD：ssh-host.test.ts 重寫期望（裸 `::1`→`[::1]`、`[::1]`→`[::1]`、混亂括號→`[::1]`、IPv4/域名原樣、trim）→ RED（現行實作剝括號）。
+2. GREEN：normalizeSshHostname 新語意（含 `:` → 移除所有括號字元後包單層方括號；無 `:` → trim 原樣）；DO probe 與 connectSession 經既有接線自動生效。
+3. 證據鏈：probe worker 實測 `[::1]` 可連（workerd 層）＋ 單元測試保證 app 層輸出 bracket 形式；app 的 connect 與 probe 使用同一 workerd connect()。
+4. 回歸：ssh-host + backend-ssh-do + index 測試 + 前端全量 + typecheck + build。
+5. App 級驗收結果：暫存 `[::1]:2299` → `127.0.0.1:2222` forwarder，使用真實 app API 建立裸 `::1` 連線；UI 完成 TOFU 指紋確認、terminal banner 與 `v6-echo-test` 回顯，console errors=0 且 OS miss 為 204。測試 connection、forwarder 與暫存檔均已清理，既有 8787/2222 服務保持運行。
+
+## 二十七、任務 23 推送與 Cloudflare 正式部署（2026-08-26）
+
+> 觸發：使用者要求「推送到 github 吧」，並在確認選項中選擇「推送並部署」。
+
+### 已確認需求與決策
+
+1. 範圍：提交並推送目前任務 23 的全部變更，包括 OS cache miss 204、IPv6 workerd 方括號修復、直接測試、README 與 agent 紀錄。
+2. 提交方式：依 repository 既有英文 plain-style 與原子提交慣例拆分；實作與直接測試同一提交，不改寫已推送歷史，不 force push。
+3. 目標：直接 fast-forward 推送目前 `main` 至 `origin/main`。
+4. 部署：push 後手動觸發既有 `Deploy to Cloudflare` `workflow_dispatch`，等待 workflow 完成；不得假設 push 自動部署。
+5. 驗收：本地完整回歸維持全綠；HEAD 與 origin/main 一致、工作樹乾淨；deployment workflow 成功；production 首頁可正常回應。需登入或真實 IPv6 SSH 主機才能驗證的正式環境行為，若無可用認證／主機則以 workflow 成功與既有本機 App E2E 作證，明列殘餘風險。

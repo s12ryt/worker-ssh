@@ -396,3 +396,12 @@
 - 後續（同日）：使用者追問「已選取 0 筆為什麼 ui 還在」→ 選取 bar 改為只在選取數 > 0 時出現，「全選本頁」入口搬到主機 section heading（.section-heading-side），清單空時一併隱藏；HTML contract 測試 2 新（index.html?raw + index-of 斷言元素歸屬）；390px 量測 DOM 溢出驗證。教訓：(4) 常駐的「0 筆＋disabled 按鈕」bar 是視覺噪音——批次操作列應由實際選取狀態驅動出現，入口控制項留在清單標題列。
 - Git 操作（2026-08-26 推送）：任務 21+22 共 43 檔以 17 個英文 plain-style 原子提交（Add/Normalize/Store/Apply/Add/Merge/Carry/Cache×2/Accept/Parse/Edit/Fix/Wire/Add/Document/Record）推送 main，fast-forward `414db1c..8e17e98`，每 commit 附 Sisyphus footer（repo 慣例）；混合多任務的樞紐檔（index.ts/backend-ssh-do.ts/main.ts/client.go）歸主功能 commit 並在計畫中記理由；依賴排序使每個 commit 點可獨立編譯（shared→store→Go→DO→快取→API→前端模組→膠水層→工具→文件→紀錄）；gh run list 確認 push 未觸發 deployment（僅 workflow_dispatch）。
 
+## 2026-08-26 OS 204 與 IPv6 workerd 方括號修復（任務 23）
+
+- 讀取：frontend main.ts/os-cache.ts/api.ts、Worker index.ts/backend-ssh-do.ts/ssh-host.ts、既有 frontend/Worker 測試、README 與 agent 四份紀錄；查閱 Cloudflare TCP sockets 文檔，但文檔未明載 literal IPv6 hostname 格式。
+- 寫入：index.ts（OS KV miss 204）、api.ts（204/404→null）、index.test.ts、api.test.ts（getOs 四條契約）、ssh-host.ts（IPv6 統一 bracket）、ssh-host.test.ts（裸/已括號/scope-id/混亂括號/IPv4/域名）、README、question.md 第二十五/二十六節及 agent 紀錄。
+- 決定性探針：暫存 probe worker 8799 與 127.0.0.1/[::1]:9790 echo server實測 `cloudflare:sockets connect()`；裸 `::1` 穩定失敗、`[::1]` 成功。完成後停止 probe 程序並刪除暫存目錄。
+- App E2E：暫存 `[::1]:2299`→`127.0.0.1:2222` forwarder；真實 API 建立裸 `::1` 連線，UI 完成 TOFU、terminal banner 與文字回顯；console errors=0 且 OS miss 204。刪除測試 connection、停止 forwarder、刪除暫存檔，8787/2222 保持。
+- 教訓：(1) 平台 API 的 hostname 契約不能只依一般 `net.JoinHostPort` 直覺推定，Worker sockets 與 Go dialer 對 bracket 的要求可相反，必須各自在邊界正規化；(2)「自動化測試通過」不代表覆蓋 runtime-specific 行為，平台格式不明時要建最小真實 probe；(3) 預期 cache miss 應回 204 而不是 404，否則正常控制流程會污染瀏覽器錯誤訊號；(4) 修正 runtime 契約後需做 App 級 TOFU→shell→input E2E，才能證明不只是 socket 層成功。
+- 收尾驗證：deployment 20/20、前端 32 檔 320/320、Worker 21 檔 201/201、Go `-count=1` PASS、typecheck、build、check:split、三個變更程式檔 LSP diagnostics 全綠；app.js 131.6KB、terminal 284.9KB。Worker suite 仍出現既有 Windows Miniflare EBUSY 暫存清理警告但退出碼為 0。服務檢查：8787 PID23916、2222 PID16612 持續 LISTEN。
+
