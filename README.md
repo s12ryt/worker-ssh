@@ -9,7 +9,59 @@
 - 巢狀資料夾、批量移動、拖放與遞迴主機數。
 - SSH 終端、SFTP 串流讀寫、Linux/macOS/BSD 主機監控。
 - TOFU 主機指紋、連線配額、RPC frame／速率／並行限制。
+- IPv6 主機位址：裸 IPv6（`2001:db8::1`）與帶方括號（`[2001:db8::1]`）皆可輸入，連線時自動正規化。
+- SSH 附加選項（`ssh -o`）：表單逐行設定或貼上整串 ssh 指令自動匯入（見下方說明）。
+- Cloudflare Access SSH 代理：免安裝 cloudflared，直接以 WebSocket 通道連接受 Access 保護的主機（見下方說明）。
 - 深色與高對比主題、終端字級、監控頻率及重連偏好。
+
+## SSH 主機位址與 IPv6
+
+主機欄位接受域名、IPv4 與 IPv6。IPv6 可用裸位址或方括號形式：
+
+```text
+2001:db8::1
+[2001:db8::1]
+```
+
+連線時會自動去除方括號並修剪空白，兩種寫法視為同一主機。儲存時保持原樣輸入。
+
+## SSH 附加選項（-o）
+
+連線表單的「SSH 選項」以逐行 `Key=Value` 填寫，等同 `ssh -o Key=Value`。支援的選項白名單：
+
+| 選項 | 說明 |
+| --- | --- |
+| `ServerAliveInterval` | keepalive 秒數（0–600，>0 時自動啟用 keepalive） |
+| `ServerAliveCountMax` | keepalive 連續失敗上限（1–100，預設 3） |
+| `ConnectTimeout` | TCP 交握逾時秒數（1–120） |
+| `Ciphers` | 加密演算法清單（逗號分隔） |
+| `MACs` | MAC 演算法清單 |
+| `KexAlgorithms` | 金鑰交換演算法清單 |
+| `HostKeyAlgorithms` | 主機金鑰演算法清單 |
+| `ProxyCommand` | 僅支援 `cloudflared access ssh --hostname ...` 形態，自動轉換為 Access 代理設定 |
+
+白名單以外的選項（如 `StrictHostKeyChecking`，與內建 TOFU 主機指紋確認衝突）會在儲存時被拒絕並列出選項名。
+
+### 由 ssh 指令匯入
+
+表單頂部可貼上整串 ssh 指令自動填入，例如：
+
+```bash
+ssh -o ServerAliveInterval=30 -o ProxyCommand="cloudflared access ssh --hostname ssh.example.com" user@203.0.113.10 -p 2222
+```
+
+解析器會帶入主機、埠、使用者名稱與 `-o` 選項；`ProxyCommand` 為 cloudflared Access 形態時自動轉換為 Access 代理設定。不支援的旗標與選項會以提示列出但不影響匯入。
+
+## Cloudflare Access SSH 代理
+
+針對由 Cloudflare Zero Trust（Access + Tunnel）保護的 SSH 主機，worker-ssh 內建 Access WebSocket 通道，**不需要在瀏覽器或本機安裝 cloudflared**：
+
+1. 主機經 `cloudflared tunnel` 發佈，並在 Zero Trust 後台為該 hostname 建立 Access 應用程式。
+2. 如需服務Token驗證，到 Zero Trust 後台 **Settings > Service Tokens** 建立 token，將 Client ID / Client Secret 填入連線表單的 Access 區塊。Public（無驗證政策）的 tunnel 可留空。
+3. 也可以直接在表單填 `ProxyCommand=cloudflared access ssh --hostname <hostname>`，系統會自動轉換。
+4. 使用 self-hosted cloudflared（SSH 模式，非 tunnel）時，額外填寫 Jump Destination（`host[:port]`），等同 `Cf-Access-Jump-Destination`。
+
+通道以 WebSocket binary frame 承載原始 SSH TCP bytes，認證 headers 為 `CF-Access-Client-Id` / `CF-Access-Client-Secret`（service token）。Client Secret 加密儲存於 D1，API 回應永不回傳。
 
 ## 一鍵部署到 Cloudflare
 
