@@ -1,0 +1,121 @@
+name: Deploy to Cloudflare
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: worker-ssh-production-deploy
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+
+      - name: Verify required repository secrets
+        shell: bash
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          PANEL_PASSWORD: ${{ secrets.PANEL_PASSWORD }}
+          ENCRYPTION_KEY: ${{ secrets.ENCRYPTION_KEY }}
+        run: |
+          set -euo pipefail
+          missing=()
+          for name in CLOUDFLARE_API_TOKEN CLOUDFLARE_ACCOUNT_ID PANEL_PASSWORD ENCRYPTION_KEY; do
+            if [[ -z "${!name:-}" ]]; then
+              missing+=("$name")
+            fi
+          done
+          if (( ${#missing[@]} > 0 )); then
+            printf '::error::Missing required repository secrets: %s\n' "${missing[*]}"
+            exit 1
+          fi
+
+      - name: Install dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm ci
+
+      - name: Run tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm test
+
+      - name: Typecheck
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm run typecheck
+
+      - name: Build
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm run build
+          npm run check:split
+
+      - name: Prepare Cloudflare resources
+        shell: bash
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          PANEL_PASSWORD: ${{ secrets.PANEL_PASSWORD }}
+          ENCRYPTION_KEY: ${{ secrets.ENCRYPTION_KEY }}
+        run: |
+          set -euo pipefail
+          node scripts/cloudflare-deploy.mjs prepare
+
+      - name: Validate generated deployment bundle
+        shell: bash
+        run: |
+          set -euo pipefail
+          npx wrangler deploy --dry-run --config .cloudflare-deploy/wrangler.json --outdir .cloudflare-deploy/dry-run
+
+      - name: Deploy Worker
+        shell: bash
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          set -euo pipefail
+          npx wrangler deploy --config .cloudflare-deploy/wrangler.json --secrets-file .cloudflare-deploy/secrets.json
+
+      - name: Deployment summary
+        shell: bash
+        run: |
+          set -euo pipefail
+          {
+            echo '### Cloudflare deployment complete'
+            echo ''
+            echo '- Worker: `worker-ssh`'
+            echo '- D1: `worker-ssh-db`'
+            echo '- KV: `worker-ssh-kv`'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Remove temporary deployment files
+        if: ${{ always() }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          node scripts/cloudflare-deploy.mjs cleanup
