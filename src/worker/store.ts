@@ -10,7 +10,7 @@ import type { ConnectionConfig, OsInfo } from "../shared/types";
 
 const CONN_PREFIX = "conn:";
 const OS_PREFIX = "os:";
-const CONNECTION_MIGRATION_MARKER = "migration:connections:v2";
+const CONNECTION_MIGRATION_MARKER = "migration:connections:v3";
 const KV_BULK_GET_LIMIT = 100;
 const LIST_DECRYPT_CONCURRENCY = 64;
 const DEFAULT_MIGRATION_BATCH_SIZE = 4;
@@ -157,7 +157,7 @@ export class ConnectionStore {
     let failed = 0;
     let conflicts = 0;
 
-    // v1 每筆都需要獨立 PBKDF2；刻意循序處理，將單次請求成本限制在批次大小內。
+    // v1/v2 都需要舊 PBKDF2 路徑；刻意循序處理，將單次請求成本限制在批次大小內。
     for (const key of page.keys) {
       scanned += 1;
       const raw = await this.kv.get(key.name);
@@ -171,7 +171,7 @@ export class ConnectionStore {
         blockers += 1;
         continue;
       }
-      if (decrypted.version === "v2") continue;
+      if (decrypted.version === "v3") continue;
 
       const replacement = await encryptString(
         this.encryptionKey,
@@ -183,8 +183,8 @@ export class ConnectionStore {
         if (current !== null) {
           try {
             if (
-              (await decryptStringDetailed(this.encryptionKey, current)).version ===
-              "v1"
+              (await decryptStringDetailed(this.encryptionKey, current)).version !==
+              "v3"
             ) {
               blockers += 1;
             }

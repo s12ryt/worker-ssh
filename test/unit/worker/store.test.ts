@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { env } from "cloudflare:test";
 import { ConnectionStore, OsCache, hostKeyOf } from "../../../src/worker/store";
 import { decryptStringDetailed, encryptString } from "../../../src/worker/crypto";
-import { encryptLegacyV1 } from "./crypto-fixtures";
+import { encryptLegacyV1, encryptLegacyV2 } from "./crypto-fixtures";
 
 const KEY = "test-encryption-key";
 
@@ -38,7 +38,7 @@ describe("ConnectionStore", () => {
     expect(raw).toBeTruthy();
     expect(raw).not.toContain("s3cr3t-密碼");
     expect(raw).not.toContain("192.168.1.10");
-    expect(raw?.startsWith("v2:")).toBe(true);
+    expect(raw?.startsWith("v3:")).toBe(true);
   });
 
   it("list 回傳所有連線（解密後）", async () => {
@@ -135,42 +135,58 @@ describe("ConnectionStore", () => {
     expect(batchSizes).toEqual([100, 100, 50]);
   });
 
-  it("分批遷移只改寫 v1，完成後留下 marker 且重複呼叫不重寫", async () => {
+  it("分批遷移將 v1/v2 改寫為 v3，完成後留下新 marker且不重寫 v3", async () => {
     const legacy = {
       ...baseInput,
       id: "legacy-migrate",
       createdAt: 1,
       updatedAt: 1,
     };
-    const current = {
+    const legacyV2 = {
       ...baseInput,
-      id: "already-v2",
-      name: "already-v2",
+      id: "legacy-v2",
+      name: "legacy-v2",
       createdAt: 2,
       updatedAt: 2,
     };
+    const current = {
+      ...baseInput,
+      id: "already-v3",
+      name: "already-v3",
+      createdAt: 3,
+      updatedAt: 3,
+    };
     const legacyRaw = await encryptLegacyV1(KEY, JSON.stringify(legacy));
+    const legacyV2Raw = await encryptLegacyV2(KEY, JSON.stringify(legacyV2));
     const currentRaw = await encryptString(KEY, JSON.stringify(current));
+    await env.KV.put("migration:connections:v2", "complete");
     await env.KV.put("conn:legacy-migrate", legacyRaw);
-    await env.KV.put("conn:already-v2", currentRaw);
+    await env.KV.put("conn:legacy-v2", legacyV2Raw);
+    await env.KV.put("conn:already-v3", currentRaw);
 
     const store = new ConnectionStore(env.KV, KEY);
     const result = await store.migrateLegacyBatch(undefined, 10);
 
     expect(result).toMatchObject({
       done: true,
-      scanned: 2,
-      migrated: 1,
+      scanned: 3,
+      migrated: 2,
       failed: 0,
       conflicts: 0,
     });
     const migratedRaw = await env.KV.get("conn:legacy-migrate");
-    expect(migratedRaw?.startsWith("v2:")).toBe(true);
+    expect(migratedRaw?.startsWith("v3:")).toBe(true);
     await expect(decryptStringDetailed(KEY, migratedRaw!)).resolves.toMatchObject({
-      version: "v2",
+      version: "v3",
       plaintext: JSON.stringify(legacy),
     });
-    expect(await env.KV.get("conn:already-v2")).toBe(currentRaw);
+    const migratedV2Raw = await env.KV.get("conn:legacy-v2");
+    await expect(decryptStringDetailed(KEY, migratedV2Raw!)).resolves.toMatchObject({
+      version: "v3",
+      plaintext: JSON.stringify(legacyV2),
+    });
+    expect(await env.KV.get("conn:already-v3")).toBe(currentRaw);
+    expect(await env.KV.get("migration:connections:v3")).toBe("complete");
 
     await expect(store.migrateLegacyBatch(undefined, 10)).resolves.toMatchObject({
       done: true,
