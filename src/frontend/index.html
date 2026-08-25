@@ -1,0 +1,293 @@
+<!doctype html>
+<html lang="zh-Hant" data-theme="dark">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="color-scheme" content="dark" />
+  <title>Worker SSH · 雲端終端工作台</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Crect width='24' height='24' rx='6' fill='%230d1024'/%3E%3Cpath d='M7 8l4 4-4 4M12.5 16H17' stroke='%238ab4ff' stroke-width='2' stroke-linecap='round' stroke-linejoin='round' fill='none'/%3E%3C/svg%3E" />
+  <link rel="preload" as="font" href="/fonts/inter-latin-400-normal.woff2" type="font/woff2" crossorigin />
+  <link rel="stylesheet" href="/app.css" />
+  <link rel="stylesheet" href="/styles/liquid-glass.css" />
+</head>
+<body>
+  <!-- 背景光暈裝飾 -->
+  <div class="bg-aurora" aria-hidden="true">
+    <div class="aurora aurora-a"></div>
+    <div class="aurora aurora-b"></div>
+  </div>
+
+  <!-- ══ 視圖一：登入 ══ -->
+  <section id="view-login" class="view view-center hidden">
+    <form id="login-form" class="glass-card glass-narrow">
+      <h1 class="brand">Worker<span>SSH</span></h1>
+      <p class="muted">輸入面板密碼以解鎖連線管理</p>
+      <label class="field">
+        <span>面板密碼</span>
+        <input id="login-password" type="password" autocomplete="current-password" required />
+      </label>
+      <p id="login-error" class="error-msg hidden"></p>
+      <button type="submit" class="btn btn-primary btn-block">登入</button>
+    </form>
+  </section>
+
+  <!-- ══ 視圖二：連線管理 ══ -->
+  <section id="view-connections" class="view hidden">
+    <header class="topbar glass-bar">
+      <h1 class="brand brand-sm">Worker<span>SSH</span></h1>
+      <div class="topbar-actions">
+        <button id="folder-new-btn" type="button" class="btn btn-ghost"><span aria-hidden="true">＋</span><span>新增資料夾</span></button>
+        <button id="conn-new-btn" type="button" class="btn btn-primary"><svg class="icon" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true" focusable="false"><path d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z"/></svg><span>新增連線</span></button>
+        <button id="settings-btn" aria-label="設定" title="設定" type="button" class="btn btn-ghost btn-icon settings-button"><svg class="icon" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true" focusable="false"><path d="M19.14 12.94a7.8 7.8 0 0 0 .05-.94 7.8 7.8 0 0 0-.05-.94l2.03-1.58a.5.5 0 0 0 .12-.64l-1.92-3.32a.5.5 0 0 0-.61-.22l-2.39.96a7.3 7.3 0 0 0-1.62-.94L14.39 2.8a.5.5 0 0 0-.5-.42h-3.84a.5.5 0 0 0-.5.42l-.36 2.52a7.3 7.3 0 0 0-1.62.94L5.18 5.3a.5.5 0 0 0-.61.22L2.65 8.84a.5.5 0 0 0 .12.64l2.03 1.58a7.8 7.8 0 0 0-.05.94c0 .32.02.63.05.94l-2.03 1.58a.5.5 0 0 0-.12.64l1.92 3.32a.5.5 0 0 0 .61.22l2.39-.96c.5.38 1.04.7 1.62.94l.36 2.52a.5.5 0 0 0 .5.42h3.84a.5.5 0 0 0 .5-.42l.36-2.52a7.3 7.3 0 0 0 1.62-.94l2.39.96a.5.5 0 0 0 .61-.22l1.92-3.32a.5.5 0 0 0-.12-.64l-2.03-1.58ZM12 15.5A3.5 3.5 0 1 1 12 8a3.5 3.5 0 0 1 0 7.5Z"/></svg></button>
+        <button id="logout-btn" type="button" class="btn btn-ghost">登出</button>
+      </div>
+    </header>
+
+    <main class="content">
+      <section class="folder-toolbar" aria-label="資料夾導覽與操作">
+        <nav id="folder-breadcrumb" class="folder-breadcrumb" aria-label="資料夾路徑"></nav>
+        <div id="folder-current-actions" class="folder-current-actions hidden">
+          <button id="folder-current-rename" type="button" class="btn btn-ghost btn-sm">重新命名</button>
+          <button id="folder-current-move" type="button" class="btn btn-ghost btn-sm">移動</button>
+          <button id="folder-current-delete" type="button" class="btn btn-danger btn-sm">刪除</button>
+        </div>
+      </section>
+      <section id="selection-bar" class="selection-bar hidden" aria-live="polite">
+        <strong id="selection-count">已選取 0 筆</strong>
+        <div>
+          <label class="selection-all-control"><input id="selection-all" type="checkbox" class="conn-select" /><span>全選本頁</span></label>
+          <button id="selection-move" type="button" class="btn btn-primary btn-sm">移動所選</button>
+          <button id="selection-clear" type="button" class="btn btn-ghost btn-sm">取消選取</button>
+        </div>
+      </section>
+      <section id="folder-section" class="folder-section hidden" aria-labelledby="folder-section-title">
+        <div class="section-heading">
+          <h2 id="folder-section-title">資料夾</h2>
+          <span id="folder-section-count" class="muted"></span>
+        </div>
+        <ul id="folder-list" class="folder-grid"></ul>
+      </section>
+      <div class="section-heading">
+        <h2>主機</h2>
+        <span id="connection-section-count" class="muted"></span>
+      </div>
+      <ul id="conn-list" class="conn-grid"></ul>
+      <ul id="conn-skeleton" class="skeleton-grid hidden" aria-hidden="true">
+        <li class="skeleton skeleton-card"></li>
+        <li class="skeleton skeleton-card"></li>
+        <li class="skeleton skeleton-card"></li>
+      </ul>
+      <div id="conn-empty" class="empty-state hidden">
+        <div class="empty-state-illustration" aria-hidden="true">
+          <svg viewBox="0 0 96 96" fill="none">
+            <rect x="20" y="28" width="56" height="44" rx="6" stroke="currentColor" stroke-width="2" opacity="0.6"/>
+            <path d="M32 28v-6a4 4 0 0 1 4-4h24a4 4 0 0 1 4 4v6" stroke="currentColor" stroke-width="2" opacity="0.6"/>
+            <path d="M20 48h56" stroke="currentColor" stroke-width="2" opacity="0.4"/>
+            <circle cx="38" cy="64" r="2" fill="currentColor" opacity="0.5"/>
+            <circle cx="48" cy="64" r="2" fill="currentColor" opacity="0.5"/>
+            <circle cx="58" cy="64" r="2" fill="currentColor" opacity="0.5"/>
+          </svg>
+        </div>
+        <p class="empty-state-title">尚無連線</p>
+        <p class="empty-state-hint">點擊「新增連線」加入你的第一台主機，開始遠端管理。</p>
+      </div>
+    </main>
+
+    <!-- 新增／編輯連線表單 -->
+    <dialog id="conn-form" class="glass-card glass-dialog">
+      <form method="dialog" id="conn-form-inner">
+        <h2 id="conn-form-title">新增連線</h2>
+        <label class="field"><span>名稱</span>
+          <input id="f-name" required placeholder="我的伺服器" /></label>
+        <div class="field-row">
+          <label class="field"><span>主機</span>
+            <input id="f-host" required placeholder="example.com" /></label>
+          <label class="field field-port"><span>埠</span>
+            <input id="f-port" type="number" min="1" max="65535" value="22" required /></label>
+        </div>
+        <label class="field"><span>使用者名稱</span>
+          <input id="f-username" required autocomplete="username" /></label>
+        <label class="field"><span>認證方式</span>
+          <select id="f-auth-type">
+            <option value="password">密碼</option>
+            <option value="privateKey">私鑰</option>
+          </select></label>
+        <label class="field auth-field auth-password"><span>密碼</span>
+          <input id="f-password" type="password" autocomplete="off" /></label>
+        <label class="field auth-field auth-key hidden"><span>私鑰（PEM）</span>
+          <textarea id="f-privatekey" rows="5" spellcheck="false"></textarea></label>
+        <label class="field auth-field auth-key hidden"><span>私鑰通關密語（選填）</span>
+          <input id="f-passphrase" type="password" autocomplete="off" /></label>
+        <section id="conn-credential-state" class="credential-state hidden" aria-labelledby="conn-credential-heading">
+          <div>
+            <strong id="conn-credential-heading">認證憑證</strong>
+            <span id="conn-credential-label" class="muted"></span>
+          </div>
+          <button id="conn-credential-clear" type="button" class="btn btn-danger btn-sm">清除憑證</button>
+        </section>
+        <section id="conn-host-key-trust" class="host-key-trust hidden" aria-labelledby="conn-host-key-heading">
+          <div>
+            <strong id="conn-host-key-heading">已信任主機金鑰</strong>
+            <span id="conn-host-key-type" class="muted"></span>
+          </div>
+          <code id="conn-host-key-fingerprint"></code>
+          <button id="conn-host-key-reset" type="button" class="btn btn-danger btn-sm">重設指紋</button>
+        </section>
+        <p id="conn-form-error" class="error-msg hidden"></p>
+        <menu class="dialog-menu">
+          <button id="conn-form-cancel" type="button" class="btn btn-ghost">取消</button>
+          <button id="conn-form-save" type="button" class="btn btn-primary">儲存</button>
+        </menu>
+      </form>
+    </dialog>
+
+    <dialog id="folder-form" class="glass-card glass-dialog folder-form-dialog">
+      <form method="dialog">
+        <h2 id="folder-form-title">新增資料夾</h2>
+        <label class="field"><span>資料夾名稱</span>
+          <input id="folder-name" required maxlength="120" autocomplete="off" /></label>
+        <p id="folder-form-error" class="error-msg hidden"></p>
+        <menu class="dialog-menu">
+          <button id="folder-form-cancel" type="button" class="btn btn-ghost">取消</button>
+          <button id="folder-form-save" type="button" class="btn btn-primary">儲存</button>
+        </menu>
+      </form>
+    </dialog>
+
+    <dialog id="move-dialog" class="glass-card glass-dialog move-dialog">
+      <form method="dialog">
+        <h2 id="move-dialog-title">移動</h2>
+        <label class="field"><span>目的地</span>
+          <select id="move-target"></select></label>
+        <p id="move-dialog-error" class="error-msg hidden"></p>
+        <menu class="dialog-menu">
+          <button id="move-dialog-cancel" type="button" class="btn btn-ghost">取消</button>
+          <button id="move-dialog-confirm" type="button" class="btn btn-primary">移動</button>
+        </menu>
+      </form>
+    </dialog>
+
+  </section>
+
+  <!-- ══ 視圖三：工作階段（終端機／SFTP／監控） ══ -->
+  <section id="view-session" class="view hidden">
+    <header class="topbar glass-bar">
+      <button id="sess-back-btn" type="button" class="btn btn-ghost" aria-label="斷開 SSH 連線並返回連線管理"><svg class="icon" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true" focusable="false"><path d="M20 11H7.83l5.59-5.59L12 4l-8 8 8 8 1.41-1.41L7.83 13H20v-2z"/></svg><span>斷開 SSH</span></button>
+      <div class="sess-meta">
+        <svg id="sess-os-icon" class="os-icon" viewBox="0 0 24 24" aria-hidden="true"
+             width="20" height="20"><path /></svg>
+        <strong id="sess-name"></strong>
+        <span id="sess-os-label" class="muted"></span>
+        <span id="sess-status" class="status-dot status-connecting" title="連線中"></span>
+      </div>
+      <nav class="tabs" role="tablist">
+        <button type="button" class="tab active" data-tab="terminal" role="tab">終端機</button>
+        <button type="button" class="tab" data-tab="sftp" role="tab">SFTP 檔案</button>
+      </nav>
+      <button id="session-settings-btn" aria-label="設定" title="設定" type="button" class="btn btn-ghost btn-icon settings-button"><svg class="icon" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true" focusable="false"><path d="M19.14 12.94a7.8 7.8 0 0 0 .05-.94 7.8 7.8 0 0 0-.05-.94l2.03-1.58a.5.5 0 0 0 .12-.64l-1.92-3.32a.5.5 0 0 0-.61-.22l-2.39.96a7.3 7.3 0 0 0-1.62-.94L14.39 2.8a.5.5 0 0 0-.5-.42h-3.84a.5.5 0 0 0-.5.42l-.36 2.52a7.3 7.3 0 0 0-1.62.94L5.18 5.3a.5.5 0 0 0-.61.22L2.65 8.84a.5.5 0 0 0 .12.64l2.03 1.58a7.8 7.8 0 0 0-.05.94c0 .32.02.63.05.94l-2.03 1.58a.5.5 0 0 0-.12.64l1.92 3.32a.5.5 0 0 0 .61.22l2.39-.96c.5.38 1.04.7 1.62.94l.36 2.52a.5.5 0 0 0 .5.42h3.84a.5.5 0 0 0 .5-.42l.36-2.52a7.3 7.3 0 0 0 1.62-.94l2.39.96a.5.5 0 0 0 .61-.22l1.92-3.32a.5.5 0 0 0-.12-.64l-2.03-1.58ZM12 15.5A3.5 3.5 0 1 1 12 8a3.5 3.5 0 0 1 0 7.5Z"/></svg></button>
+    </header>
+
+<main class="session-body">
+      <div id="panel-terminal" class="tab-panel active">
+        <div id="term-wrap" class="term-wrap">
+          <div class="term-titlebar">
+            <span class="status-dot status-connecting" id="term-status" title="連線中"></span>
+            <strong>終端機</strong>
+            <span class="muted" id="term-conn-name"></span>
+          </div>
+          <div id="term-container" class="term-container"></div>
+          <!-- 緊湊型監控列（終端機正下方） -->
+          <div id="term-metrics" class="term-metrics" style="display:none;">
+            <div class="metric-inline">
+              <span class="metric-label">CPU</span><output id="m-cpu">--</output>
+              <canvas id="m-cpu-canvas" class="sparkline-inline" aria-hidden="true"></canvas>
+            </div>
+            <div class="metric-inline">
+              <span class="metric-label">記憶體</span><output id="m-mem-used">--</output><small id="m-mem-percent">--</small>
+              <canvas id="m-mem-canvas" class="sparkline-inline" aria-hidden="true"></canvas>
+            </div>
+            <div class="metric-inline">
+              <span class="metric-label">虛擬記憶體</span><output id="m-swap-used">--</output><small id="m-swap-percent">--</small>
+            </div>
+            <div class="metric-inline">
+              <span class="metric-label">磁碟</span><output id="m-disk-used">--</output><small id="m-disk-percent">--</small>
+              <canvas id="m-disk-canvas" class="sparkline-inline" aria-hidden="true"></canvas>
+            </div>
+            <div class="metric-inline">
+              <span class="metric-label">負載</span><output id="m-load">--</output>
+            </div>
+            <div class="metric-inline">
+              <span class="metric-label">下行</span><output id="m-net-rx">--</output>
+            </div>
+            <div class="metric-inline">
+              <span class="metric-label">上行</span><output id="m-net-tx">--</output>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div id="panel-sftp" class="tab-panel hidden">
+        <div id="sftp-container"></div>
+      </div>
+    </main>
+  </section>
+
+  <dialog id="settings-dialog" class="glass-card glass-dialog settings-dialog">
+    <form id="settings-form" method="dialog">
+      <header class="settings-heading">
+        <div>
+          <h2>設定</h2>
+          <p class="muted">介面與連線偏好會同步到所有登入裝置。</p>
+        </div>
+      </header>
+      <label class="field"><span>介面主題</span>
+        <select id="settings-theme">
+          <option value="dark">深色</option>
+          <option value="high-contrast">高對比深色</option>
+        </select></label>
+      <label class="field settings-range-field"><span>終端機字級</span>
+        <div><input id="settings-font-size" type="range" min="12" max="20" step="1" value="14" /><output id="settings-font-value" for="settings-font-size">14 px</output></div></label>
+      <label class="field"><span>監控更新頻率</span>
+        <select id="settings-monitor-interval">
+          <option value="3">3 秒</option>
+          <option value="5">5 秒</option>
+          <option value="10">10 秒</option>
+          <option value="30">30 秒</option>
+        </select></label>
+      <section class="settings-reconnect" aria-labelledby="settings-reconnect-heading">
+        <label class="settings-toggle-row" for="settings-reconnect-enabled">
+          <span><strong id="settings-reconnect-heading">自動重連</strong><small>暫時性斷線時建立新的 SSH 工作階段</small></span>
+          <input id="settings-reconnect-enabled" type="checkbox" class="settings-toggle" checked />
+        </label>
+        <label class="field"><span>最多嘗試次數</span>
+          <input id="settings-reconnect-attempts" type="number" min="1" max="5" step="1" value="3" /></label>
+      </section>
+      <p id="settings-error" class="error-msg hidden"></p>
+      <menu class="dialog-menu settings-actions">
+        <button id="settings-defaults" type="button" class="btn btn-ghost">恢復預設</button>
+        <span class="settings-actions-spacer"></span>
+        <button id="settings-cancel" type="button" class="btn btn-ghost">取消</button>
+        <button id="settings-save" type="button" class="btn btn-primary">儲存</button>
+      </menu>
+    </form>
+  </dialog>
+
+  <section id="bootstrap-overlay" class="bootstrap-overlay hidden" aria-live="polite" aria-labelledby="bootstrap-title">
+    <div class="bootstrap-panel glass-card">
+      <h2 id="bootstrap-title">正在準備資料庫</h2>
+      <p id="bootstrap-phase" class="muted">檢查資料庫結構</p>
+      <progress id="bootstrap-progress" max="100" value="0"></progress>
+      <div class="bootstrap-meta">
+        <span id="bootstrap-count">0 / 0</span>
+        <strong id="bootstrap-percent">0%</strong>
+      </div>
+      <p id="bootstrap-error" class="error-msg hidden"></p>
+      <button id="bootstrap-retry" type="button" class="btn btn-primary hidden">重試初始化</button>
+    </div>
+  </section>
+
+  <!-- 全域提示 -->
+  <div id="toast" class="toast hidden" role="status"></div>
+
+  <script type="module" src="/app.js"></script>
+</body>
+</html>
