@@ -404,4 +404,5 @@
 - App E2E：暫存 `[::1]:2299`→`127.0.0.1:2222` forwarder；真實 API 建立裸 `::1` 連線，UI 完成 TOFU、terminal banner 與文字回顯；console errors=0 且 OS miss 204。刪除測試 connection、停止 forwarder、刪除暫存檔，8787/2222 保持。
 - 教訓：(1) 平台 API 的 hostname 契約不能只依一般 `net.JoinHostPort` 直覺推定，Worker sockets 與 Go dialer 對 bracket 的要求可相反，必須各自在邊界正規化；(2)「自動化測試通過」不代表覆蓋 runtime-specific 行為，平台格式不明時要建最小真實 probe；(3) 預期 cache miss 應回 204 而不是 404，否則正常控制流程會污染瀏覽器錯誤訊號；(4) 修正 runtime 契約後需做 App 級 TOFU→shell→input E2E，才能證明不只是 socket 層成功。
 - 收尾驗證：deployment 20/20、前端 32 檔 320/320、Worker 21 檔 201/201、Go `-count=1` PASS、typecheck、build、check:split、三個變更程式檔 LSP diagnostics 全綠；app.js 131.6KB、terminal 284.9KB。Worker suite 仍出現既有 Windows Miniflare EBUSY 暫存清理警告但退出碼為 0。服務檢查：8787 PID23916、2222 PID16612 持續 LISTEN。
+- Git／正式部署：11 檔拆為 5 個原子提交（IPv6 實作＋測試、Worker OS 204＋測試、前端 204/404 相容＋測試、README、agent 四 ledger），fast-forward `c443d8c..ca124c5` 推送 main。手動觸發 `Deploy to Cloudflare` run `32885755182`，綁定 SHA `ca124c5`，所有 CI／dry-run／deploy／cleanup steps success。production Playwright smoke：首頁標題與登入畫面正常、`/api/session` 200 unauthenticated、乾淨 reload 0 console errors；唯一 warning 為既有 Inter preload 未使用。未輸入 production 密碼，避免讀取或散播正式認證資料。
 

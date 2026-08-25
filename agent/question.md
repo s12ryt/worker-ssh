@@ -896,3 +896,10 @@
 3. 目標：直接 fast-forward 推送目前 `main` 至 `origin/main`。
 4. 部署：push 後手動觸發既有 `Deploy to Cloudflare` `workflow_dispatch`，等待 workflow 完成；不得假設 push 自動部署。
 5. 驗收：本地完整回歸維持全綠；HEAD 與 origin/main 一致、工作樹乾淨；deployment workflow 成功；production 首頁可正常回應。需登入或真實 IPv6 SSH 主機才能驗證的正式環境行為，若無可用認證／主機則以 workflow 成功與既有本機 App E2E 作證，明列殘餘風險。
+
+### 實際結果
+
+1. 11 個變更檔拆為 5 個原子提交，fast-forward `c443d8c..ca124c5` 推送 `origin/main`，無 force；推送後 `HEAD === origin/main === ca124c58fd00b7da75fdeb6aaed1d96afe6a3d92`。
+2. 手動 workflow run `32885755182` 針對 `ca124c5` 完成，required secrets、typecheck、build、完整測試、Cloudflare 資源準備、Wrangler dry-run、Deploy Worker、summary 與 cleanup 全數 success。
+3. production smoke：`https://worker-ssh.yoyo-cute-owo.workers.dev/` 正常載入「Worker SSH · 雲端終端工作台」登入頁，`GET /api/session` 回 200／`{"authenticated":false}`；乾淨重載 console 0 errors，僅有 Inter font preload 未使用 warning。
+4. 未使用或要求 production 面板密碼，因此正式環境登入後的 `/api/os` 204 與真實 IPv6 SSH 連線未再次執行；這兩項由成功部署同一 SHA、CI 全綠及既有本機 App E2E 提供證據。
