@@ -45,7 +45,7 @@ Token 建議限制到單一 Cloudflare account，並只授予：
 Workflow 會依序執行：
 
 1. 安裝 Node.js／Go 相依套件。
-2. 執行完整測試、型別檢查、建置與拆包檢查。
+2. 執行型別檢查，建立 Go WASM／Worker／前端產物並完成拆包檢查，再執行完整測試。
 3. 查找 `worker-ssh-db` D1 與 `worker-ssh-kv` KV；存在則重用，不存在才建立。
 4. 產生不入版控的一次性 Wrangler config 與 secret JSON。
 5. 執行 Wrangler dry-run，再部署 `worker-ssh`。

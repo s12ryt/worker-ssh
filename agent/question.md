@@ -707,3 +707,26 @@
 4. README 提供「一鍵部署」章節：四個 repository secrets 名稱、Cloudflare API token 最小權限、Run workflow 操作、首次登入/bootstrap、production URL取得方式、資源命名與故障排查；不得要求把秘密提交到檔案。
 5. 初始化 Git 前執行秘密與公開檔案盤點；依功能／測試／部署／文件拆成原子提交，建立公開 GitHub repository 後推送 `main`，驗證遠端檔案、分支、Actions workflow與LICENSE可讀。
 6. 完整前端、Worker、Go測試、typecheck、build、check:split、deployment script tests與workflow YAML解析通過；本機 Wrangler `http://127.0.0.1:8787` 與 SSH fixture `127.0.0.1:2222` 保持運行。
+
+## 二十、GitHub Actions npm lockfile 相容性修復（2026-08-25）
+
+> 觸發：使用者提供 `Deploy to Cloudflare` workflow run `32802591933` 的 `npm ci` 失敗紀錄。GitHub Node 22 預設 npm 10 回報 lockfile 缺少 `@cloudflare/workers-types@4.20260702.1`；本機 npm 11.7.0 可正常執行同一份 lockfile。
+
+### 已確認需求與決策
+
+1. 專案與 GitHub Actions 的唯一 npm 工具鏈版本固定為 `11.7.0`；不以 npm 10 重建 lockfile，也不承諾 stock Node 22/npm 10 可直接執行 `npm ci`。
+2. `package.json` 必須以標準 `packageManager` 欄位宣告 `npm@11.7.0`，讓開發者與自動化工具能辨識正確版本。
+3. GitHub workflow 必須在 `npm ci` 前明確安裝 npm `11.7.0`，並執行版本驗證；不得依賴 GitHub runner 隨 Node 22 附帶的浮動 npm 版本。
+4. 修復後只提交並推送 `main`，不得由本輪重新觸發 Cloudflare production workflow；使用者自行決定何時再次按下 **Run workflow**。
+5. 不變更任何 Cloudflare 資源、repository secrets、Worker 程式行為、本機 D1/KV 資料或既有 Wrangler／SSH fixture 服務。
+6. Worker Vitest 的 `ASSETS` 不得依賴被 `.gitignore` 排除的 `dist/client`。採用已提交的最小 `test/fixtures/assets/index.html` 作測試資產，讓 assets binding 本身不要求前端 build；不得以調換 workflow 的 build/test 順序掩蓋這項測試環境依賴。
+7. Worker 模組對 `dist/worker/wasm_exec.js` 與 `ssh.wasm` 的靜態匯入屬正式 Go WASM 建置依賴，二進位仍不得提交。依使用者決策，GitHub workflow 在 `npm ci` 後先執行完整 build／split guard，再執行測試；不新增 `pretest:worker` 自動建置。
+
+### 可觀察行為與驗收條件
+
+1. 先擴充 deployment release contract 建立 RED：要求 `packageManager === "npm@11.7.0"`，workflow 在 `npm ci` 前安裝並驗證 `11.7.0`；缺少任一契約時測試必須因目標行為不存在而失敗。
+2. 使用 `npx npm@11.7.0 ci --dry-run` 與實際乾淨 `npm ci` 驗證 lockfile；不得以 `npm install` 取代 CI 的 clean install 證據。
+3. 執行 deployment tests、完整前端／Worker／Go測試、typecheck、build 與 check:split；不得宣稱未執行的驗證已通過。
+4. 建立原子提交並推送 `main`，確認本機 `HEAD` 與 `origin/main` 一致、工作樹乾淨；GitHub workflow 保持 active，且修復推送不會因 workflow 僅有 `workflow_dispatch` 而自動產生新 run。
+5. 本機 Wrangler `http://127.0.0.1:8787` 與 SSH fixture `127.0.0.1:2222` 必須保持運行。
+6. Worker 測試設定必須指向已提交的 fixture，並以 HTTP fallback 測試證明 `ASSETS` 可用。隔離 worktree 的真實驗證順序為 `npm ci` → `npm run build`／`npm run check:split` → `npm test`；build 產生 Go WASM，但測試 ASSETS 仍只使用已提交的 fixture。
