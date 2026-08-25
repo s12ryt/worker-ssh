@@ -394,4 +394,5 @@
 - 瀏覽器操作（Playwright@8787）：登入→勾選→fetch API 把已選主機移到 awa 資料夾（模擬跨分頁）→建臨時資料夾觸發清單重拉→觀察全選框/計數/移動 dialog；修復前重現假全選+幽靈計數+點擊清空，修復後半選+交集計數+移動僅有效 id；每次驗證後復原（loc 移回、zz-* 資料夾刪除）。
 - 教訓：(1) 集合型 UI 判定（全選/半選）不能拿「selected 絕對大小」比「清單大小」——跨分頁同步會產生清單外 id，必須用交集；(2) 純函式狀態類（FolderBrowserState）先補單元測試再讓 DOM 膠水層接線，雙層（狀態修剪+渲染交集）互為保險；(3) 「假全選」checkbox 被點擊時瀏覽器走 true→false 分支，會把使用者原有勾選全部清空——顯示錯誤的狀態會放大成資料操作錯誤。
 - 後續（同日）：使用者追問「已選取 0 筆為什麼 ui 還在」→ 選取 bar 改為只在選取數 > 0 時出現，「全選本頁」入口搬到主機 section heading（.section-heading-side），清單空時一併隱藏；HTML contract 測試 2 新（index.html?raw + index-of 斷言元素歸屬）；390px 量測 DOM 溢出驗證。教訓：(4) 常駐的「0 筆＋disabled 按鈕」bar 是視覺噪音——批次操作列應由實際選取狀態驅動出現，入口控制項留在清單標題列。
+- Git 操作（2026-08-26 推送）：任務 21+22 共 43 檔以 17 個英文 plain-style 原子提交（Add/Normalize/Store/Apply/Add/Merge/Carry/Cache×2/Accept/Parse/Edit/Fix/Wire/Add/Document/Record）推送 main，fast-forward `414db1c..8e17e98`，每 commit 附 Sisyphus footer（repo 慣例）；混合多任務的樞紐檔（index.ts/backend-ssh-do.ts/main.ts/client.go）歸主功能 commit 並在計畫中記理由；依賴排序使每個 commit 點可獨立編譯（shared→store→Go→DO→快取→API→前端模組→膠水層→工具→文件→紀錄）；gh run list 確認 push 未觸發 deployment（僅 workflow_dispatch）。
 

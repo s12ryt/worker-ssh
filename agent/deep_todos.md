@@ -571,7 +571,7 @@
   - [x] 評估後不做：backend-ssh-runtime 10ms 輪詢事件化（暖 DO 下 load() 第一行即命中 `registry.sshEngine` 直接返回，DO 重用後價值消失）；quota 搬入 DO（仍兩跳無淨益）；D1 config isolate 快取（違反「credential 只在 DO 記憶體短暫使用」邊界）。
   - [x] 量測對照（第二輪）：total median 694→335~387ms（兩輪 5+6 iterations；**較基線 960ms -60%**）、s1_ws 501→214~278ms、s2_ssh 175→113~137ms。
 - **最終驗證**：Worker 21 檔 201/201（+sshSessionDoName 2）；前端 32 檔 312/312；Go `-count=1` PASS；typecheck 雙 tsconfig 全綠；build PASS；check:split OK（app.js 131.3KB、terminal chunk 284.9KB）。
-- **未推送**：本任務未 commit/push（使用者未要求）；GitHub main 仍在 `292bcef`。
+- **已推送（2026-08-26）**：任務 21+22 變更以 17 個原子提交推送 main（`a3d577a..8e17e98`，fast-forward `414db1c..8e17e98`）；HEAD === origin/main，工作樹乾淨；Actions 無新 run（workflow 僅 workflow_dispatch，push 不觸發部署）。
 - **服務狀態**：期間 8787/2222 服務一度退出，已重建：dev-ssh-server 重編譯啟動（PID 16612@2222）、wrangler dev（PID 23916@8787），依使用者要求保持運行。
 
 ---
@@ -585,5 +585,5 @@
   - [x] 顯示層：`selectedConnectionIds(visibleIds?)` 新可選參數回傳交集；main.ts 四處接線——renderSelectionBar（全選/半選/計數/按鈕 disabled）、renderConnList 單卡勾選恢復與 dragstart、selection-move 的 ids。
   - [x] TDD：RED 2 測試（修剪 + 交集）因行為缺失失敗 → GREEN 5/5（含 3 既有）。
 - **驗證**：前端全量 32 檔 314/314（+2 新）；typecheck 雙 tsconfig 綠；build PASS；check:split OK（app.js 131.6KB）。Playwright 復驗缺陷場景：重現步驟（勾選→API 移走一台→建資料夾觸發重拉）後全選框正確半選（原假全選）、計數 1 筆（原幽靈 2 筆）、「移動所選」只帶 1 台有效 id、全選/取消路徑正常；測試後環境已復原（loc 移回未分類、臨時資料夾刪除）。改動僅前端三檔，Worker/Go 不受影響。
-- **服務狀態**：wrangler dev（8787）與 dev-ssh-server（2222）全程保持運行；未 commit/push。
+- **服務狀態**：wrangler dev（8787）與 dev-ssh-server（2222）全程保持運行；變更已隨任務 21 的 17 個提交一併推送（見任務 21「已推送」行）。
 - **後續調整（同日，使用者追問「已選取 0 筆為什麼 ui 還在」）**：選取 bar 顯示規則改為「只在選取數 > 0 時出現」——「全選本頁」checkbox 搬到「主機」section heading 右側群組（`.section-heading-side`，與台數計數同列，清單空時隱藏）；bar 內只剩計數＋移動/取消按鈕；renderSelectionBar 改 `count === 0` 隱藏 bar。TDD：settings-ui-contract.test.ts 新 describe 2 契約測試（selection-all 不在 bar 區段內且位於主機 heading；bar 只含計數與動作按鈕）RED→GREEN；移除 mobile 舊規則 `.selection-all-control { flex:1 }`（已不在 bar 內）。前端 32 檔 316/316、typecheck/build/check:split 全綠；Playwright 復驗四步（0 筆 bar 隱藏、勾 1 台 bar 出現半選、標題列全選 3 筆、取消 bar 消失且全選入口仍在）＋390px 手機版無水平溢出（scrollWidth 375 < 390）。決策記錄於 question.md 第二十四節「後續調整」。
