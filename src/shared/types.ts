@@ -1,4 +1,7 @@
 // 前後端共用型別契約
+import type { AccessProxyConfig, SshOption } from "./ssh-options";
+
+export type { AccessProxyConfig, SshOption };
 
 /** SSH 認證方式 */
 export type AuthType = "password" | "privateKey";
@@ -23,6 +26,10 @@ export interface ConnectionConfig {
   hostKeyType?: string;
   /** TOFU 已信任的 OpenSSH SHA-256 指紋 */
   hostKeyFingerprint?: string;
+  /** SSH -o 附加選項（白名單純量項；ProxyCommand 不在此，見 accessProxy） */
+  sshOptions?: SshOption[];
+  /** cloudflared Access WebSocket 代理通道；啟用時不直連 host */
+  accessProxy?: AccessProxyConfig;
   createdAt: number;
   updatedAt: number;
   /** 最近一次連線成功時間（ms epoch）；D20 雲同步，舊資料可能 undefined */
@@ -33,11 +40,22 @@ export interface ConnectionConfig {
 
 export type CredentialState = "ready" | "missing";
 
+/** Access 代理的公開視圖：clientSecret 永不外流 */
+export interface AccessProxyView {
+  hostname: string;
+  destination?: string;
+  clientId?: string;
+}
+
 /** 一般 API 可回傳的連線 DTO；敏感憑證永不離開 Worker。 */
 export interface ConnectionView
-  extends Omit<ConnectionConfig, "password" | "privateKey" | "passphrase"> {
+  extends Omit<
+    ConnectionConfig,
+    "password" | "privateKey" | "passphrase" | "accessProxy"
+  > {
   folderId: string | null;
   credentialState: CredentialState;
+  accessProxy?: AccessProxyView;
 }
 
 export interface FolderView {

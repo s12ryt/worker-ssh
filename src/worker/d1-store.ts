@@ -1,4 +1,10 @@
-import type { AuthType, ConnectionConfig } from "../shared/types";
+import type {
+  AccessProxyConfig,
+  AccessProxyView,
+  AuthType,
+  ConnectionConfig,
+  SshOption,
+} from "../shared/types";
 import { decryptString, encryptString } from "./crypto";
 
 const ROOT_SCOPE = "__root__";
@@ -26,6 +32,8 @@ export interface ConnectionView {
   credentialState: CredentialState;
   hostKeyType?: string;
   hostKeyFingerprint?: string;
+  sshOptions?: SshOption[];
+  accessProxy?: AccessProxyView;
   createdAt: number;
   updatedAt: number;
   lastConnectedAt?: number;
@@ -64,12 +72,16 @@ export type D1ConnectionPatch = Partial<
     | "hostKeyFingerprint"
     | "lastConnectedAt"
     | "lastDisconnectedAt"
+    | "sshOptions"
+    | "accessProxy"
   >
 > & {
   hostKeyType?: string | null;
   hostKeyFingerprint?: string | null;
   lastConnectedAt?: number | null;
   lastDisconnectedAt?: number | null;
+  sshOptions?: SshOption[] | null;
+  accessProxy?: AccessProxyConfig | null;
 };
 
 interface ConnectionRow {
@@ -100,6 +112,14 @@ export class CredentialRequiredError extends Error {
   constructor() {
     super("credential required");
     this.name = "CredentialRequiredError";
+  }
+}
+
+/** PUT accessProxy 帶 clientId 但 clientSecret 未提供且無既有值可沿用 */
+export class AccessSecretRequiredError extends Error {
+  constructor() {
+    super("access proxy client secret required");
+    this.name = "AccessSecretRequiredError";
   }
 }
 
@@ -216,6 +236,20 @@ function publicConnection(
     ...(config.hostKeyFingerprint
       ? { hostKeyFingerprint: config.hostKeyFingerprint }
       : {}),
+    ...(config.sshOptions ? { sshOptions: config.sshOptions } : {}),
+    ...(config.accessProxy
+      ? {
+          accessProxy: {
+            hostname: config.accessProxy.hostname,
+            ...(config.accessProxy.destination
+              ? { destination: config.accessProxy.destination }
+              : {}),
+            ...(config.accessProxy.clientId
+              ? { clientId: config.accessProxy.clientId }
+              : {}),
+          },
+        }
+      : {}),
     createdAt: config.createdAt,
     updatedAt: config.updatedAt,
     ...(config.lastConnectedAt !== undefined
@@ -295,6 +329,16 @@ export class D1ConnectionStore {
     return row ? this.decodeConnection(row) : null;
   }
 
+  /** 單次 D1 查詢＋單次解密，同時导出公開視圖與內部設定（SSH 連線路徑專用）。 */
+  async getConnectionWithInternal(
+    id: string,
+  ): Promise<{ view: ConnectionView; config: ConnectionConfig } | null> {
+    const row = await this.connectionRow(id);
+    if (!row) return null;
+    const config = await this.decodeConnection(row);
+    return { view: publicConnection(config, row.folder_id), config };
+  }
+
   async updateConnection(
     id: string,
     patch: D1ConnectionPatch,
@@ -308,6 +352,8 @@ export class D1ConnectionStore {
       hostKeyFingerprint,
       lastConnectedAt,
       lastDisconnectedAt,
+      sshOptions,
+      accessProxy,
       ...plainPatch
     } = patch;
     const updated: ConnectionConfig = {
@@ -336,6 +382,36 @@ export class D1ConnectionStore {
     if (hostKeyFingerprint === null) delete updated.hostKeyFingerprint;
     if (lastConnectedAt === null) delete updated.lastConnectedAt;
     if (lastDisconnectedAt === null) delete updated.lastDisconnectedAt;
+
+    // SSH 選項：undefined=保留、null=清除、陣列=替換
+    if (sshOptions !== undefined) {
+      if (sshOptions === null || sshOptions.length === 0) {
+        delete updated.sshOptions;
+      } else {
+        updated.sshOptions = sshOptions;
+      }
+    }
+
+    // Access 代理：undefined=保留、null=清除、物件=替換（clientSecret 空白沿用既有值）
+    if (accessProxy !== undefined) {
+      if (accessProxy === null) {
+        delete updated.accessProxy;
+      } else {
+        const secret =
+          accessProxy.clientSecret?.trim() ||
+          existing.accessProxy?.clientSecret;
+        if (accessProxy.clientId && !secret) {
+          throw new AccessSecretRequiredError();
+        }
+        const merged: AccessProxyConfig = { ...accessProxy };
+        if (secret) {
+          merged.clientSecret = secret;
+        } else {
+          delete merged.clientSecret;
+        }
+        updated.accessProxy = merged;
+      }
+    }
 
     if (authType === "password") {
       delete updated.privateKey;

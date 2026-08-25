@@ -91,6 +91,25 @@ describe("D1ConnectionStore 憑證生命週期", () => {
     expect(cleared?.credentialState).toBe("missing");
     expect((await store.getConnectionInternal(created.id))?.password).toBeUndefined();
   });
+
+  it("getConnectionWithInternal 單次讀取同時回傳公開視圖與內部設定", async () => {
+    const store = new D1ConnectionStore(env.DB, KEY);
+    const created = await store.createConnection(passwordConnection("Gamma"));
+
+    const combined = await store.getConnectionWithInternal(created.id);
+    expect(combined).not.toBeNull();
+    expect(combined!.view).toMatchObject({
+      id: created.id,
+      name: "Gamma",
+      credentialState: "ready",
+      folderId: null,
+    });
+    expect(combined!.view).not.toHaveProperty("password");
+    expect(combined!.config.password).toBe("secret-Gamma");
+    expect(combined!.config.id).toBe(created.id);
+
+    expect(await store.getConnectionWithInternal("missing-id")).toBeNull();
+  });
 });
 
 describe("D1ConnectionStore 資料夾結構與計數", () => {
