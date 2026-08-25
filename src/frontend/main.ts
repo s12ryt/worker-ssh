@@ -48,6 +48,7 @@ import {
   buildConnectionSubmission,
   connectionFormValues,
 } from "./connection-form-state";
+import { parseSshCommand } from "./ssh-command-import";
 import type { SshClientLike } from "./ssh-client-contract";
 import { cleanupSessionResources, type SessionResources } from "./session-lifecycle";
 import { handleSessionReconnect } from "./session-reconnect";
@@ -137,10 +138,21 @@ async function loadApplicationSettings(): Promise<void> {
 
 // ---- 登入／登出 ----
 
+/**
+ * 終端模組（xterm，獨立 chunk ~285KB）預載：
+ * 登入後背景下載，與 bootstrap／設定／列表 API 重疊，
+ * 首次連線時 connectTo 內的動態 import 直接命中快取。
+ * 模組層無副作用（純類別定義），提前載入安全。
+ */
+function preloadTerminal(): void {
+  void import("./terminal").catch(() => undefined);
+}
+
 async function refreshSession(): Promise<void> {
   try {
     const info = await session();
     if (info.authenticated) {
+      preloadTerminal();
       await initializeDatabase();
       await loadApplicationSettings();
       await showConnections();
@@ -159,6 +171,7 @@ $("login-form").addEventListener("submit", async (ev) => {
   try {
     await login($val("login-password"));
     ($("login-password") as HTMLInputElement).value = "";
+    preloadTerminal();
     await initializeDatabase();
     await loadApplicationSettings();
     await showConnections();
@@ -417,8 +430,15 @@ function renderBreadcrumb(scope: FolderScopeView): void {
 }
 
 function renderSelectionBar(): void {
-  const count = folderBrowser.selectedConnectionIds().length;
-  $("selection-bar").classList.toggle("hidden", currentScope.connections.length === 0);
+  // 以「選取 ∩ 當前清單」計算，避免清單外的幽靈 id 造成假全選或矛盾計數。
+  const visibleIds = currentScope.connections.map((conn) => conn.id);
+  const count = folderBrowser.selectedConnectionIds(visibleIds).length;
+  // bar 只在實際有選取時出現；「全選本頁」入口常駐於主機標題列（清單為空時一併隱藏）。
+  $("selection-bar").classList.toggle("hidden", count === 0);
+  $("selection-all-control").classList.toggle(
+    "hidden",
+    currentScope.connections.length === 0,
+  );
   $("selection-count").textContent = `已選取 ${count} 筆`;
   const selectAll = $("selection-all") as HTMLInputElement;
   selectAll.checked = currentScope.connections.length > 0 && count === currentScope.connections.length;
@@ -519,6 +539,8 @@ function renderConnList(conns: ConnectionView[]): void {
   const list = $("conn-list");
   $("conn-skeleton").classList.add("hidden");
   list.replaceChildren();
+  const visibleIds = conns.map((conn) => conn.id);
+  const selectedIds = folderBrowser.selectedConnectionIds(visibleIds);
   for (const cfg of conns) {
     const li = document.createElement("li");
     li.className = "glass-card conn-card is-hoverable";
@@ -529,7 +551,8 @@ function renderConnList(conns: ConnectionView[]): void {
         event.preventDefault();
         return;
       }
-      const selected = folderBrowser.selectedConnectionIds();
+      // 拖曳只帶當前清單內的選取（交集），避免幽靈 id 進入移動請求。
+      const selected = folderBrowser.selectedConnectionIds(visibleIds);
       const ids = selected.includes(cfg.id) ? selected : [cfg.id];
       event.dataTransfer?.setData(CONNECTION_DRAG_TYPE, JSON.stringify(ids));
       event.dataTransfer?.setDragImage(li, 24, 24);
@@ -540,7 +563,7 @@ function renderConnList(conns: ConnectionView[]): void {
     const select = document.createElement("input");
     select.type = "checkbox";
     select.className = "conn-select";
-    select.checked = folderBrowser.selectedConnectionIds().includes(cfg.id);
+    select.checked = selectedIds.includes(cfg.id);
     select.setAttribute("aria-label", `選取 ${cfg.name}`);
     select.addEventListener("change", () => {
       folderBrowser.toggleConnection(cfg.id, select.checked);
@@ -786,7 +809,10 @@ $("selection-clear").addEventListener("click", () => {
   renderSelectionBar();
 });
 $("selection-move").addEventListener("click", () => {
-  const ids = folderBrowser.selectedConnectionIds();
+  // 移動所選只帶當前清單內的有效選取（交集），避免幽靈 id 進入移動請求。
+  const ids = folderBrowser.selectedConnectionIds(
+    currentScope.connections.map((conn) => conn.id),
+  );
   if (ids.length > 0) void openMoveDialog({ kind: "connections", ids });
 });
 
@@ -840,6 +866,13 @@ function openConnForm(cfg?: ConnectionView): void {
   set("f-password", values.password);
   set("f-privatekey", values.privateKey);
   set("f-passphrase", values.passphrase);
+  set("f-ssh-options", values.sshOptionsText);
+  set("f-access-hostname", values.accessHostname);
+  set("f-access-destination", values.accessDestination);
+  set("f-access-client-id", values.accessClientId);
+  set("f-access-client-secret", values.accessClientSecret);
+  set("f-import-command", "");
+  $("conn-import-warnings").classList.add("hidden");
   setAuthFields($val("f-auth-type"));
   renderHostKeyTrust(cfg);
   renderCredentialState(cfg);
@@ -852,6 +885,43 @@ $("conn-form-cancel").addEventListener("click", () =>
   ($("conn-form") as HTMLDialogElement).close(),
 );
 $("f-auth-type").addEventListener("change", () => setAuthFields($val("f-auth-type")));
+
+// ssh 指令匯入：解析後填入表單欄位；無法匯入的項目列為提示
+$("conn-import-btn").addEventListener("click", () => {
+  const warnEl = $("conn-import-warnings");
+  const errEl = $("conn-form-error");
+  warnEl.classList.add("hidden");
+  errEl.classList.add("hidden");
+  const result = parseSshCommand($val("f-import-command"));
+  if (!result.ok) {
+    errEl.textContent = result.error;
+    errEl.classList.remove("hidden");
+    return;
+  }
+  const set = (id: string, value: string) => {
+    ($(id) as HTMLInputElement | HTMLTextAreaElement).value = value;
+  };
+  set("f-host", result.value.host);
+  set("f-port", String(result.value.port));
+  if (result.value.username !== undefined) set("f-username", result.value.username);
+  if (result.value.sshOptions.length > 0) {
+    set(
+      "f-ssh-options",
+      result.value.sshOptions.map((o) => `${o.key}=${o.value}`).join("\n"),
+    );
+  }
+  if (result.value.accessProxy) {
+    const proxy = result.value.accessProxy;
+    set("f-access-hostname", proxy.hostname);
+    set("f-access-destination", proxy.destination ?? "");
+    set("f-access-client-id", proxy.clientId ?? "");
+    set("f-access-client-secret", proxy.clientSecret ?? "");
+  }
+  if (result.value.warnings.length > 0) {
+    warnEl.textContent = result.value.warnings.join("；");
+    warnEl.classList.remove("hidden");
+  }
+});
 
 $("conn-host-key-reset").addEventListener("click", async () => {
   if (!editingConnection?.hostKeyFingerprint) return;
@@ -910,6 +980,11 @@ $("conn-form-save").addEventListener("click", () => {
       password: $val("f-password"),
       privateKey: $val("f-privatekey"),
       passphrase: $val("f-passphrase"),
+      sshOptionsText: $val("f-ssh-options"),
+      accessHostname: $val("f-access-hostname"),
+      accessDestination: $val("f-access-destination"),
+      accessClientId: $val("f-access-client-id"),
+      accessClientSecret: $val("f-access-client-secret"),
     });
   } catch (err) {
     errEl.textContent = err instanceof Error ? err.message : String(err);
@@ -918,7 +993,13 @@ $("conn-form-save").addEventListener("click", () => {
   }
   const save = editingId
     ? updateConnection(editingId, data)
-    : createConnection({ ...data, folderId: folderBrowser.currentFolderId });
+    : createConnection({
+        ...data,
+        // null 是更新時的「清除」語意；建立請求一律省略該欄位
+        sshOptions: data.sshOptions ?? undefined,
+        accessProxy: data.accessProxy ?? undefined,
+        folderId: folderBrowser.currentFolderId,
+      });
   save
     .then(() => {
       ($("conn-form") as HTMLDialogElement).close();
@@ -989,6 +1070,11 @@ async function connectTo(cfg: ConnectionView): Promise<void> {
       ($("term-metrics") as HTMLElement).style.display = "none";
       setStatus("closed");
     });
+    // 與 WebSocket 連線並行預熱 OS 快取讀取（KV GET）：
+    // OsCache 對同 key 的進行中請求去重，detectOs 內的 fetch 直接共享結果，
+    // 讓 KV 往返與 SSH handshake 重疊，縮短連線到終端可用的時間。
+    const osKey = `${cfg.host}:${cfg.port}`;
+    void osCache.fetch(osKey, getOs).catch(() => undefined);
     const connId = await client.connect(cfg, undefined, (info) =>
       verifyHostKeyTrust(cfg, info, {
         confirm: openConfirmModal,
@@ -999,10 +1085,10 @@ async function connectTo(cfg: ConnectionView): Promise<void> {
     if (resources.cleaned) throw new Error("SSH 連線已在建立過程中關閉");
 
     // OS 偵測（帶快取）→ 更新標籤列
-    const family = await detectOs(client, connId, `${cfg.host}:${cfg.port}`);
+    const family = await detectOs(client, connId, osKey);
     const label = $("sess-os-label");
     label.textContent = family;
-    void osCache.fetch(`${cfg.host}:${cfg.port}`, getOs).then((info) => {
+    void osCache.fetch(osKey, getOs).then((info) => {
       if (info) {
         const icon = $("sess-os-icon");
         icon.querySelector("path")?.setAttribute("d", iconForOs(info.os).path);

@@ -85,3 +85,30 @@ describe("設定入口與自訂選取控制項", () => {
     expect(html.slice(memIndex, diskIndex)).toContain("虛擬記憶體");
   });
 });
+
+describe("選取 bar 顯示規則", () => {
+  it("全選控制位於主機區塊標題列，不住在選取 bar 內", () => {
+    const barStart = html.indexOf('id="selection-bar"');
+    const barEnd = html.indexOf("</section>", barStart);
+    const headingIndex = html.indexOf('id="connection-section-count"');
+    const selectAllIndex = html.indexOf('id="selection-all"');
+
+    expect(barStart).toBeGreaterThanOrEqual(0);
+    expect(barEnd).toBeGreaterThan(barStart);
+    expect(selectAllIndex).toBeGreaterThan(headingIndex);
+    // 全選控制不得落在 selection-bar 區段內。
+    expect(selectAllIndex).toBeGreaterThan(barEnd);
+  });
+
+  it("選取 bar 只含計數與動作按鈕，作為選取後的批次操作列", () => {
+    const barStart = html.indexOf('id="selection-bar"');
+    const barEnd = html.indexOf("</section>", barStart);
+    const bar = html.slice(barStart, barEnd);
+
+    expect(bar).toContain('id="selection-count"');
+    expect(bar).toContain('id="selection-move"');
+    expect(bar).toContain('id="selection-clear"');
+    expect(bar).not.toContain('id="selection-all"');
+    expect(bar).toContain("hidden");
+  });
+});

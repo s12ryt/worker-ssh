@@ -403,6 +403,8 @@ textarea { resize: vertical; font-family: Consolas, monospace; }
 .selection-all-control:hover { border-color: var(--glass-border-strong); background: var(--glass-bg-hover); }
 .section-heading { justify-content: space-between; margin: 14px 0 8px; }
 .section-heading h2 { margin: 0; font-size: 0.95rem; }
+/* 標題列右側群組：台數計數 + 全選本頁入口（0 筆時由 JS 隱藏全選） */
+.section-heading-side { display: flex; align-items: center; gap: 10px; }
 .folder-section { margin-bottom: 20px; }
 .folder-grid {
   display: grid;
@@ -616,6 +618,27 @@ textarea { resize: vertical; font-family: Consolas, monospace; }
 }
 .credential-state > div { display: grid; gap: 3px; }
 
+/* ssh 指令匯入提示與 Access 代理區塊（-o 選項功能） */
+.import-warnings {
+  margin: 4px 0 0;
+  font-size: 0.78rem;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+.access-details {
+  margin: 12px 0 0;
+}
+.access-details summary {
+  cursor: pointer;
+  font-size: 0.85rem;
+  opacity: 0.85;
+  margin-bottom: 8px;
+}
+.access-details[open] summary {
+  margin-bottom: 4px;
+}
+.access-details .field { margin: 8px 0; }
+
 .settings-dialog {
   width: min(560px, 94vw);
   max-height: calc(100dvh - 32px);
@@ -757,7 +780,6 @@ dialog.folder-delete-backdrop::backdrop { background: transparent; }
   .selection-bar { align-items: flex-start; flex-direction: column; }
   .selection-bar > div { width: 100%; }
   .selection-bar .btn { flex: 1; }
-  .selection-all-control { flex: 1; justify-content: center; }
   .folder-grid, .conn-grid, .skeleton-grid { grid-template-columns: 1fr; }
   .folder-delete-actions { display: grid; }
   .folder-delete-actions .btn { width: 100%; }

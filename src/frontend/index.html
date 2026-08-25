@@ -55,7 +55,6 @@
       <section id="selection-bar" class="selection-bar hidden" aria-live="polite">
         <strong id="selection-count">已選取 0 筆</strong>
         <div>
-          <label class="selection-all-control"><input id="selection-all" type="checkbox" class="conn-select" /><span>全選本頁</span></label>
           <button id="selection-move" type="button" class="btn btn-primary btn-sm">移動所選</button>
           <button id="selection-clear" type="button" class="btn btn-ghost btn-sm">取消選取</button>
         </div>
@@ -69,7 +68,10 @@
       </section>
       <div class="section-heading">
         <h2>主機</h2>
-        <span id="connection-section-count" class="muted"></span>
+        <div class="section-heading-side">
+          <span id="connection-section-count" class="muted"></span>
+          <label class="selection-all-control hidden" id="selection-all-control"><input id="selection-all" type="checkbox" class="conn-select" /><span>全選本頁</span></label>
+        </div>
       </div>
       <ul id="conn-list" class="conn-grid"></ul>
       <ul id="conn-skeleton" class="skeleton-grid hidden" aria-hidden="true">
@@ -118,6 +120,26 @@
           <textarea id="f-privatekey" rows="5" spellcheck="false"></textarea></label>
         <label class="field auth-field auth-key hidden"><span>私鑰通關密語（選填）</span>
           <input id="f-passphrase" type="password" autocomplete="off" /></label>
+        <label class="field"><span>ssh 指令匯入（貼上完整 ssh 指令自動填入）</span>
+          <div class="field-row" style="align-items: stretch;">
+            <input id="f-import-command" placeholder="ssh -o ProxyCommand=&quot;cloudflared access ssh --hostname xxx&quot; user@example.com -p 2222" spellcheck="false" />
+            <button id="conn-import-btn" type="button" class="btn btn-ghost">匯入</button>
+          </div>
+        </label>
+        <p id="conn-import-warnings" class="muted import-warnings hidden"></p>
+        <label class="field"><span>SSH 選項（每行一個 Key=Value，如 ServerAliveInterval=60）</span>
+          <textarea id="f-ssh-options" rows="3" spellcheck="false" placeholder="ServerAliveInterval=60&#10;ServerAliveCountMax=3"></textarea></label>
+        <details class="field access-details">
+          <summary>Cloudflare Access 代理（cloudflared access ssh）</summary>
+          <label class="field"><span>Access 主機名稱（hostname）</span>
+            <input id="f-access-hostname" placeholder="loc-ssh.example.com" spellcheck="false" /></label>
+          <label class="field"><span>最終目的地（選填，host[:port]）</span>
+            <input id="f-access-destination" placeholder="10.0.0.1:22" spellcheck="false" /></label>
+          <label class="field"><span>Service Token ID（選填）</span>
+            <input id="f-access-client-id" autocomplete="off" spellcheck="false" /></label>
+          <label class="field"><span>Service Token Secret（編輯時留空＝沿用）</span>
+            <input id="f-access-client-secret" type="password" autocomplete="new-password" /></label>
+        </details>
         <section id="conn-credential-state" class="credential-state hidden" aria-labelledby="conn-credential-heading">
           <div>
             <strong id="conn-credential-heading">認證憑證</strong>
