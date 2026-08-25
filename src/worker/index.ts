@@ -774,7 +774,9 @@ async function handleOs(req: Request, env: Env, url: URL): Promise<Response> {
     const key = url.searchParams.get("key");
     if (!key) return json({ error: "key required" }, 400);
     const info = await cache.get(key);
-    return info ? json(info) : json({ error: "not found" }, 404);
+    // 未命中改回 204（快取探測語意，非錯誤）：瀏覽器 console 不再對首次連線/清單重繪
+    // 的 KV miss 印 404 紅字；前端 getOs 同時容忍 204 與 404（滾動部署相容）。
+    return info ? json(info) : new Response(null, { status: 204 });
   }
   if (req.method === "PUT") {
     const body = await readJson(req);

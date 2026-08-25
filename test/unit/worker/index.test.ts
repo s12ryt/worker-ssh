@@ -996,13 +996,14 @@ describe("OS 快取 API（需登入）", () => {
     await expect(get.json()).resolves.toEqual(INFO);
   });
 
-  it("GET 不存在的 key → 404", async () => {
+  it("GET 不存在的 key → 204 No Content（快取未命中非錯誤，避免 console 404 噪音）", async () => {
     const cookie = await loginCookie();
     const res = await SELF.fetch(
       "https://example.com/api/os?key=nothing",
       withCookie({}, cookie),
     );
-    expect(res.status).toBe(404);
+    expect(res.status).toBe(204);
+    expect(await res.text()).toBe("");
   });
 
   it("PUT 缺 key 或缺 info → 400", async () => {
