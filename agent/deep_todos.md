@@ -539,3 +539,51 @@
 - **相容性邊界**：fresh production D1沒有成功建立的舊加密row。v1/v2可相容讀取程式仍存在，但Cloudflare production無法保證直接解密歷史PBKDF2 210k信封；若未來有此類production資料，需在可支援舊KDF的離線/本機環境先遷移為v3。
 - **推送與服務收尾**：七個原子提交已推送至`main`的`292bcef`，workflow僅手動觸發，push後沒有新增Actions run。隔離8788服務、temp env與worktree已清除。為修復主工作區先前EBUSY留下的不完整`node_modules`，受控停止舊8787後執行真正`npm@11.7.0 ci`與最新build，再以background Wrangler恢復`http://127.0.0.1:8787`；parent PID90728、listener PID76996，HTTP GET實測200。SSH fixture PID27768/2222保持運行。
 - **環境與發布**：本機runtime仍fallback compatibility date 2025-09-06，Windows Miniflare仍有temp EBUSY警告但suite全綠。修復將推送main，依使用者決策不由本輪觸發Cloudflare部署。
+
+---
+
+## 任務 21：IPv6 支援、SSH -o 選項／Access 代理與連線速度自主疊代（✅ 已完成 2026-08-26）
+
+- **來源與決策**：使用者要求 (1) IPv6 主機支援＋自主疊代升級 SSH 連線速度；(2) 新增 `ssh -o` 附加選項與 Cloudflare Access 代理。完整契約見 `agent/question.md` 第二十二節（IPv6／速度）與第二十三節（-o／Access）。要點：IPv6 裸/方括號皆接受、連線時正規化、儲存原樣；驗收僅自動化測試；速度口徑=點擊連線→terminal 可輸入；優化全部授權；-o 白名單外儲存時 400 列名；ProxyCommand 僅 cloudflared access ssh 形態自動轉 Access；secret 加密儲存永不回傳；README 必須文件化。
+- **IPv6（TDD）**：
+  - [x] Worker：新增 `src/worker/ssh-host.ts` `normalizeSshHostname`（trim＋strip 成對方括號），`backend-ssh-do.ts` probe/connectSession 兩處接入；`test/unit/worker/ssh-host.test.ts` 5 測試。
+  - [x] Go：`client.go` 新增 `normalizeHost`（同語意）修正 `JoinHostPort` 對 `[::1]` 產生 `[[::1]]:port`；`testserver_test.go` 參數化 `startTestServerOn`；`client_test.go` 新增 `[::1]` 原生 dial 與 bracketed/bare TOFU hostname 一致測試（skipIfNoIPv6Loopback）。
+- **-o 選項與 Access 代理（TDD，全鏈）**：
+  - [x] shared：`src/shared/ssh-options.ts`（8 鍵白名單、值驗證、`parseAccessProxyCommand` tokenizer、`validateAccessProxy`／寬鬆 `validateAccessProxyShape`、`tokenizeCommand`、`SSH_HOST_CHARSET`）；20 測試。
+  - [x] 儲存：`ConnectionConfig` 加 `sshOptions`／`accessProxy`；d1-store `publicConnection` 輸出脫敏 view（無 clientSecret）、`updateConnection` 合併語意（undefined 保留/null 清除/替換；PUT secret 空白沿用舊值，`AccessSecretRequiredError`→400）；index.ts `parseConnection`/`sanitizePatch` 改 `ParseResult` 回傳（400 列出不支援選項名）。API 6 測試。
+  - [x] DO：`isBackendConnectionConfig` 擴充 sshOptions/accessProxy 形狀驗證（含 clientId→secret 綁定）；5 測試。
+  - [x] 前端：`src/frontend/ssh-command-import.ts` 完整 ssh 指令解析（-o/-p/-l、黏形、引號、不支援旗標 warning）10 測試；表單 `connection-form-state.ts` SSH 選項 textarea＋Access 四欄＋匯入按鈕（secret 永不回填）11 測試；index.html/main.ts/styles 接線。
+  - [x] Go：`SshOption` 型別＋`applySshOptions`（Ciphers/MACs/Kex/HostKeyAlgorithms/ConnectTimeout 映射）；`keepaliveFromOptions`＋`goKeepalive`（`keepalive@openssh.com`，連續失敗≥CountMax 斷線）；`DialClient` 簽名改三回傳（stop func）；main.go WASM bridge 解析 sshOptions 並管理 keepaliveStops；testserver 計數 keepalive；8 原生測試；WASM 重建。
+  - [x] Access transport：`src/worker/access-ws-transport.ts`——對 `https://<hostname>/` WS 升級、`CF-Access-Client-Id/Secret`＋`Cf-Access-Jump-Destination` headers、binary frame 承載 SSH bytes、實作 Go NewWsConn shim 介面（onData 緩衝 4MB/冪等 close/close code 分類）；`backend-ssh-do.ts` accessProxy 時改走此 transport（免 cloudflared）；11 測試（mock WS，驗收=自動化測試決策）。
+  - [x] README：新增「SSH 主機位址與 IPv6」「SSH 附加選項（-o）」（白名單表＋指令匯入範例）「Cloudflare Access SSH 代理」三節。
+- **速度自主疊代（量測→瓶頸→逐項 TDD）**：
+  - [x] 量測腳本 `scripts/measure-ssh-connect.mjs`：忠實模擬 connectTo 序列（WS→ready→OS KV→openShell→first shell-data），分段統計 median/p95；基線 total median 960ms（s1_ws 709／s2_ssh 142／s3_os 103）。
+  - [x] 優化1 bootstrap ready gate isolate 快取（`db-ready-cache.ts`，TTL 60s；D1 外部重置由後續 404 兜底）：-100ms 級。
+  - [x] 優化2 handleSsh 雙 D1 查詢合併（`getConnectionWithInternal` 單 SELECT 單解密同時導出 view+config）：-33ms 級。
+  - [x] 優化3 DO /init+/connect 合併單一 subrequest（payload 走 `X-Session-Config` base64 header；廢 OneTimeSessionInit nonce/409 重試；非法 header 400）：-50ms 級。
+  - [x] 優化4 quota 並行：**實作後回退**——並行使 404/409/426 路徑也建 quota DO instance，Windows Miniflare 穩定 EBUSY 崩潰；取穩定性，quota 維持序列。
+  - [x] 優化5 前端 OS 偵測與 WS 並行（connectTo 預熱 `osCache.fetch`，inflight 去重共享結果；量測腳本同步）：s3_os 103→0.3ms。
+  - [x] 優化6 HKDF 簽章金鑰 isolate 快取（`cachedSigningKey` Map，失敗不快取；create/verifySessionToken 接線）。
+  - [x] 量測對照：total median 960→694ms（**-28%**）、s1_ws 709→501ms、s3_os 103→0.3ms（5+5 iterations 兩輪確認）。
+- **速度第二輪疊代（使用者要求繼續找優化點）**：
+  - [x] 優化7 DO 重用 by connectionId：`ssh-session-init.ts` 新 export `sshSessionDoName(connectionId)`（`ssh-${connectionId}`，TDD 2 測試），index.ts `getByName` 改用；優化3 後 DO 無跨請求狀態（config 走 header）故重用安全，暖 isolate 免 DO 冷啟動與 7.9MB WASM 重 instantiate；DO 淘汰後 `getByName` 重建=原本行為。
+  - [x] 優化8 前端 terminal chunk（285KB）登入後預載：main.ts `preloadTerminal()` 於 refreshSession authenticated 與 login 成功後、initializeDatabase 前觸發（下載與 bootstrap/設定/列表重疊）。
+  - [x] 評估後不做：backend-ssh-runtime 10ms 輪詢事件化（暖 DO 下 load() 第一行即命中 `registry.sshEngine` 直接返回，DO 重用後價值消失）；quota 搬入 DO（仍兩跳無淨益）；D1 config isolate 快取（違反「credential 只在 DO 記憶體短暫使用」邊界）。
+  - [x] 量測對照（第二輪）：total median 694→335~387ms（兩輪 5+6 iterations；**較基線 960ms -60%**）、s1_ws 501→214~278ms、s2_ssh 175→113~137ms。
+- **最終驗證**：Worker 21 檔 201/201（+sshSessionDoName 2）；前端 32 檔 312/312；Go `-count=1` PASS；typecheck 雙 tsconfig 全綠；build PASS；check:split OK（app.js 131.3KB、terminal chunk 284.9KB）。
+- **未推送**：本任務未 commit/push（使用者未要求）；GitHub main 仍在 `292bcef`。
+- **服務狀態**：期間 8787/2222 服務一度退出，已重建：dev-ssh-server 重編譯啟動（PID 16612@2222）、wrangler dev（PID 23916@8787），依使用者要求保持運行。
+
+---
+
+## 任務 22：Web UI 選中判定缺陷修復（✅ 已完成 2026-08-26）
+
+- **來源與調查**：使用者反映「web-ui 的選中判定是不是有點問題」。代碼審查 + Playwright 對本機 dev 實測重現缺陷，契約見 `agent/question.md` 第二十四節。
+- **缺陷（已實證重現）**：勾選主機後若其中一台被另一分頁/裝置移走或刪除，本分頁重拉清單後：(a) 全選框因 `count === length` 碰巧成立顯示「假全選」（清單上有主機未勾卻顯示已全選）；(b) count > length 時全選框呈現全未選樣式但計數 N 筆且按鈕啟用（矛盾）；(c) 假全選態下點擊全選框（true→false）反而清空所有勾選；(d) 拖曳 dragstart 與「移動所選」把幽靈 id 帶進 moveConnections。根因：main.ts 以 selected Set 絕對數量比對清單大小，且 selected 從不修剪清單外 id（本地操作路徑皆有清理，唯獨清單重拉沒有）。
+- **修復（使用者確認：雙層修復 + 交集計數）**：
+  - [x] 根本層：`FolderBrowserState.replaceScope` 同 folderId 時把 selected 修剪為 ∩ scope.connections（幽靈移除、有效保留）。
+  - [x] 顯示層：`selectedConnectionIds(visibleIds?)` 新可選參數回傳交集；main.ts 四處接線——renderSelectionBar（全選/半選/計數/按鈕 disabled）、renderConnList 單卡勾選恢復與 dragstart、selection-move 的 ids。
+  - [x] TDD：RED 2 測試（修剪 + 交集）因行為缺失失敗 → GREEN 5/5（含 3 既有）。
+- **驗證**：前端全量 32 檔 314/314（+2 新）；typecheck 雙 tsconfig 綠；build PASS；check:split OK（app.js 131.6KB）。Playwright 復驗缺陷場景：重現步驟（勾選→API 移走一台→建資料夾觸發重拉）後全選框正確半選（原假全選）、計數 1 筆（原幽靈 2 筆）、「移動所選」只帶 1 台有效 id、全選/取消路徑正常；測試後環境已復原（loc 移回未分類、臨時資料夾刪除）。改動僅前端三檔，Worker/Go 不受影響。
+- **服務狀態**：wrangler dev（8787）與 dev-ssh-server（2222）全程保持運行；未 commit/push。
+- **後續調整（同日，使用者追問「已選取 0 筆為什麼 ui 還在」）**：選取 bar 顯示規則改為「只在選取數 > 0 時出現」——「全選本頁」checkbox 搬到「主機」section heading 右側群組（`.section-heading-side`，與台數計數同列，清單空時隱藏）；bar 內只剩計數＋移動/取消按鈕；renderSelectionBar 改 `count === 0` 隱藏 bar。TDD：settings-ui-contract.test.ts 新 describe 2 契約測試（selection-all 不在 bar 區段內且位於主機 heading；bar 只含計數與動作按鈕）RED→GREEN；移除 mobile 舊規則 `.selection-all-control { flex:1 }`（已不在 bar 內）。前端 32 檔 316/316、typecheck/build/check:split 全綠；Playwright 復驗四步（0 筆 bar 隱藏、勾 1 台 bar 出現半選、標題列全選 3 筆、取消 bar 消失且全選入口仍在）＋390px 手機版無水平溢出（scrollWidth 375 < 390）。決策記錄於 question.md 第二十四節「後續調整」。

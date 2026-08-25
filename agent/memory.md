@@ -370,3 +370,28 @@
 - 本機服務恢復：受控停止卡住的舊8787後，主工作區真正執行`npm@11.7.0 ci`與最新build，並以background Wrangler重啟。最終`http://127.0.0.1:8787`由parent PID90728/listener PID76996提供服務，GET實測200；SSH fixture PID27768/2222未停止。
 - 教訓：(1) WebCrypto演算法可用不代表所有參數在production/runtime皆同上限，必須加入production-limit回歸；(2)高熵根金鑰適合HKDF，使用者密碼才需要PBKDF2/Argon2等password KDF；(3)一般database error會遮蔽crypto根因，跨層錯誤必須安全但可分類；(4)version marker升級必須同步KV marker、bootstrap與fixture，否則舊complete marker會跳過新遷移。
 
+## 2026-08-26 IPv6、SSH -o／Access 代理與連線速度疊代（任務 21）
+
+- 讀取：agent/deep_todos.md、項目表.md、memory.md、question.md 接手；src/worker/index.ts、backend-ssh-do.ts、d1-store.ts、d1-bootstrap.ts、auth.ts、ssh-session-init.ts、backend-ssh-runtime.ts、frontend main.ts/os-cache.ts/connection-form-state.ts、go-ssh client.go/main.go、cloudflared carrier 源碼、Cloudflare TCP sockets 文檔。
+- 寫入（新檔）：src/worker/ssh-host.ts、src/shared/ssh-options.ts、src/frontend/ssh-command-import.ts、src/worker/db-ready-cache.ts、src/worker/access-ws-transport.ts、scripts/measure-ssh-connect.mjs、test/unit/worker/{ssh-host,ssh-options,ssh-options-api,db-ready-cache,access-ws-transport}.test.ts、test/unit/frontend/ssh-command-import.test.ts、go-ssh/ssh_options_test.go。
+- 寫入（修改）：shared/types.ts（ConnectionConfig+sshOptions/accessProxy、AccessProxyView）、d1-store.ts（view/patch/合併/AccessSecretRequiredError/getConnectionWithInternal）、index.ts（ParseResult、requireDatabaseReady 快取接線、handleSsh 單查詢、d1Error 400 分支）、backend-ssh-do.ts（normalizeSshHostname、accessProxy transport 分流、parseSessionConfigHeader、廢 /init）、ssh-session-init.ts（重寫單 subrequest X-Session-Config）、auth.ts（cachedSigningKey）、main.ts/index.html/styles/api.ts/connection-form-state.ts（表單+匯入+OS 預熱）、go-ssh client.go/main.go/testserver_test.go/client_test.go、README.md 三節、index.test.ts 兩 423 測試 resetDbReadyCache、量測腳本 OS 預取。
+- 量測操作：node scripts/build-go.mjs 重建 WASM 兩次（IPv6 後、-o Go 後）；measure-ssh-connect.mjs 基線與優化後各 5 iterations 兩輪。
+- 服務事件：量測時發現 8787/2222 均已退出（非本 agent 停止）→ 重建：`go build` dev-ssh-server 啟動（PID 16612@2222）、`node node_modules\wrangler\bin\wrangler.js dev`（PID 23916@8787），維持運行。
+- 教訓：(1) vitest-pool-workers isolatedStorage 回滾 D1/KV 但不回滾 module 記憶體——isolate 級快取必須在依賴「未就緒狀態」的測試前明確 reset；(2) quota DO 與主路徑並行會讓錯誤請求也產生 DO instance，Windows Miniflare 下 EBUSY 直接崩 runtime——「優先無副作用錯誤路徑」與「並行提速」衝突時選穩定；(3) WS 升級請求不能帶 body，內部 RPC payload 可走自訂 base64 header；(4) cloudflared Access 通道本質就是 https://<hostname>/ 的 WS 升級＋CF-Access headers，可在 Worker 內複刻免裝 binary；(5) OS 偵測的 KV 讀取可與 SSH handshake 並行，靠既有 inflight 去重零風險重疊。
+
+### 2026-08-26 第二輪速度疊代（DO 重用 + terminal 預載）
+
+- 讀取：index.ts DO 命名使用處、backend-ssh-runtime.ts load() 暖路徑、main.ts 認證路徑、wrangler.jsonc SSH_SESSIONS 設定、外部 DO warm-start 調查（無權威文檔，社群證實冷啟動存在）。
+- 寫入（修改）：ssh-session-init.ts 新 export `sshSessionDoName(connectionId)`（穩定 DO 名 `ssh-${connectionId}`，TDD 2 測試）、index.ts getByName 接線、main.ts `preloadTerminal()`（refreshSession/login 後 import("./terminal") 預載，DOM 膠水層以 typecheck+build 驗證）。
+- 量測操作：DO 重用後 warm 連線 5+6 iterations 兩輪——total median 694→335~387ms（較基線 960ms -60%）、s1_ws 501→214~278ms（DO 冷啟動消失）、s2_ssh 175→113~137ms（WASM 重 instantiate 消失）。
+- 評估後不做：runtime 10ms 輪詢事件化（暖 DO 下第一行即命中 sshEngine，DO 重用後價值消失）、quota 搬入 DO（仍兩跳）、D1 config isolate 快取（違反 credential 記憶體邊界）。
+- 教訓：(1) DO 重用的前提是「無跨請求可變狀態」——優化3 把 config 改走 header 後 DO 變純運行時，重用才安全，順序很重要；(2) DO instance 內 module 級 WASM 單例 = 免每連線 7.9MB instantiate，記憶體面也嚴格優於每連線新 isolate；(3) 大 chunk（xterm 285KB）預載掛在認證成功後、與 bootstrap/列表 API 自然重疊，零風險。
+
+## 2026-08-26 Web UI 選中判定缺陷修復（任務 22）
+
+- 讀取：src/frontend/folder-browser-state.ts、main.ts（renderSelectionBar/renderConnList/selection handlers/openMoveDialog/deleteConnectionFromUi）、index.html selection-bar、liquid-glass.css indeterminate 樣式、test/unit/frontend/folder-browser-state.test.ts、api.ts moveConnections/deleteFolder 契約。
+- 寫入（修改）：folder-browser-state.ts（replaceScope 同 folderId 修剪 selected ∩ connections；selectedConnectionIds(visibleIds?) 交集重載）、main.ts（renderSelectionBar/renderConnList/dragstart/selection-move 四處改交集計算）、folder-browser-state.test.ts（+2 測試：修剪、交集）、agent/question.md 第二十四節、deep_todos.md 任務 22。
+- 瀏覽器操作（Playwright@8787）：登入→勾選→fetch API 把已選主機移到 awa 資料夾（模擬跨分頁）→建臨時資料夾觸發清單重拉→觀察全選框/計數/移動 dialog；修復前重現假全選+幽靈計數+點擊清空，修復後半選+交集計數+移動僅有效 id；每次驗證後復原（loc 移回、zz-* 資料夾刪除）。
+- 教訓：(1) 集合型 UI 判定（全選/半選）不能拿「selected 絕對大小」比「清單大小」——跨分頁同步會產生清單外 id，必須用交集；(2) 純函式狀態類（FolderBrowserState）先補單元測試再讓 DOM 膠水層接線，雙層（狀態修剪+渲染交集）互為保險；(3) 「假全選」checkbox 被點擊時瀏覽器走 true→false 分支，會把使用者原有勾選全部清空——顯示錯誤的狀態會放大成資料操作錯誤。
+- 後續（同日）：使用者追問「已選取 0 筆為什麼 ui 還在」→ 選取 bar 改為只在選取數 > 0 時出現，「全選本頁」入口搬到主機 section heading（.section-heading-side），清單空時一併隱藏；HTML contract 測試 2 新（index.html?raw + index-of 斷言元素歸屬）；390px 量測 DOM 溢出驗證。教訓：(4) 常駐的「0 筆＋disabled 按鈕」bar 是視覺噪音——批次操作列應由實際選取狀態驅動出現，入口控制項留在清單標題列。
+

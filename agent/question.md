@@ -753,3 +753,84 @@
 4. README／部署文件明確要求 `ENCRYPTION_KEY` 使用密碼管理器或密碼學安全亂數生成的高熵值，不建議人類可讀長句或規律字串。
 5. 執行 deployment、frontend、Worker、Go、typecheck、build、check:split 與 LSP；以本機 Wrangler 重現建立根資料夾與 SSH 主機成功，且既有 `http://127.0.0.1:8787` 與 SSH fixture `127.0.0.1:2222` 保持運行。
 6. 推送後確認 `HEAD === origin/main`、工作樹乾淨、GitHub Actions workflow 維持手動觸發且沒有由 push 產生新的 production run。
+
+## 二十二、IPv6 主機支援與 SSH 連線速度自主疊代升級（2026-08-25）
+
+> 觸發：使用者要求「對 IPv6 主機提供支援 + 自主疊代升級 SSH 連線速度」。研究確認瓶頸候選：每次連線建立全新 DO instance（7.9MB Go WASM 冷啟動）、handleSsh 兩次 D1 查詢、DO init/connect 兩次 subrequest、DO 內 10ms 輪詢等待 engine 註冊。
+
+### 已確認需求與決策
+
+1. IPv6 輸入格式：裸 IPv6（`2001:db8::1`）與帶方括號（`[2001:db8::1]`）皆接受；連線時正規化，儲存保持使用者原樣。
+2. IPv6 驗收：僅自動化測試——Worker 端 host 正規化單元測試 + Go 端 `net.JoinHostPort` 防禦與 [::1] 原生 dial 測試；不要求真實 IPv6 E2E。
+3. 速度量測口徑：點擊「連線」到 terminal 可輸入的端到端時間（本機 wrangler dev + dev-ssh-server 環境量測）。
+4. 優化手段全部授權：可動內部架構（DO 生命週期、D1 查詢、subrequest、WASM 載入策略、前端時序）；公開 API 契約、加密（v3 信封）、TOFU 驗證、quota 安全邊界不變。
+5. 自主疊代規則：量測驅動、逐項優化；未量測不優化；每項變更走 TDD；既有功能以特徵測試保護。
+
+### 可觀察行為與驗收條件
+
+1. 帶方括號或裸格式的 IPv6 host 通過相同正規化路徑：`[::1]`、`::1` 都能轉為 sockets `connect()` 可用的 hostname；`::1` 與 `127.0.0.1` 混用不影響既有 IPv4 連線。
+2. Go 端 addr 組裝對帶方括號 host 不再產生 `[[::1]]:2222`；SSH handshake 的 HostKeyCallback hostname 語意維持（TOFU 指紋綁定行為不變）。
+3. 連線速度以可重複的量測腳本（或等效自動化證據）記錄優化前後數據；每項優化有前後對照與測試保護。
+4. 全量回歸：前端、Worker、Go 測試、typecheck、build、check:split 全綠；本機 Wrangler `127.0.0.1:8787` 與 SSH fixture `127.0.0.1:2222` 保持運行。
+
+### 第二輪疊代（2026-08-26，續行本節決策 4「全部授權」）
+
+> 觸發：使用者要求「繼續找連線速度優化點」。
+
+1. 優化 7（DO 重用 by connectionId）：DO 名由 `ssh-{connectionId}-{UUID}` 改為穩定 `sshSessionDoName(connectionId)`＝`ssh-{connectionId}`。前提：優化 3 後 DO 已無跨請求可變狀態（config 走 X-Session-Config header），重用安全；暖 isolate 直接命中 module 級 WASM 單例，同時消除 s1 的 DO 冷啟動與 s2 的 WASM 重 instantiate；DO 淘汰後 `getByName` 重建，行為等同原本。記憶體面亦更優（原本每連線一份 isolate 各自 instantiate 7.9MB WASM）。
+2. 優化 8（terminal chunk 預載）：`main.ts` 於 refreshSession authenticated 與 login 成功後、initializeDatabase 之前 `void import("./terminal")`，讓 285KB terminal chunk 下載與 bootstrap／設定／列表 API 重疊（首連 UX；量測腳本口徑未涵蓋，以 typecheck+build 驗證）。
+3. 評估後不做：backend-ssh-runtime 10ms 輪詢事件化（暖 DO 下 `load()` 第一行即命中 `registry.sshEngine`，議題隨 DO 重用自然消失）；quota acquire 搬入 session DO（仍是兩跳，無淨益）；D1 config isolate 快取（違反「credential 只在 DO 記憶體短暫使用」安全邊界）。
+4. 量測結果（warmup0+6iter，無離群）：total median 386.8ms／min 263.5；s1_ws 277.6、s2_ssh 137.0、s3_os 0.3。三階段對照：基線 960ms → 第一輪 694ms（-28%）→ 第二輪 335~387ms（較基線約 -60%）。
+5. 驗收：ssh-session-init 新 2 測試（DO 名穩定性）＋全量回歸（Worker 201／前端 312／Go／typecheck／build／check:split）全綠。
+
+## 二十三、SSH `-o` 附加選項與 cloudflared Access 代理通道（2026-08-25）
+
+> 觸發：使用者要求「搞一下支持源指令-o這種附加指令」，並明確希望支援 `ProxyCommand="cloudflared access ssh --hostname loc-ssh.czy-cf.eu.cc"` 形態。cloudflared 開源碼調查確認（carrier/websocket.go）：其 Access 通道本質為對 `https://<hostname>/` 的 WebSocket 升級（WS binary frame 承載原始 SSH bytes），認證用 `CF-Access-Client-Id`/`CF-Access-Client-Secret` headers（bastion 另有 `Cf-Access-Jump-Destination`）→ Worker 端可以 fetch WS 升級直接複刻，無需執行 cloudflared 二進制。
+
+### 已確認需求與決策
+
+1. 形態：兩者都要——(a) 連線表單新增「SSH 選項」輸入（逐行 `Key=Value`），隨連線設定加密儲存，連線時套用到 Go SSH client；(b) 提供 `ssh ...` 完整指令貼上解析匯入（host/port/username/-o 選項一次帶入表單）。
+2. 選項白名單「盡量多映射」：ServerAliveInterval、ServerAliveCountMax（keepalive 心跳）、ConnectTimeout、Ciphers、MACs、KexAlgorithms、HostKeyAlgorithms（x/crypto/ssh ClientConfig 可映射項），加上 ProxyCommand（僅接受 `cloudflared access ssh` 形態）。StrictHostKeyChecking/UserKnownHostsFile 等主機金鑰驗證類與 TOFU 機制衝突，不支援。
+3. ProxyCommand→Access 代理：解析 `cloudflared access ssh --hostname <H> [--destination <D>]` 轉為內部 `accessProxy` 設定（hostname/destination）；DO 連線時以 fetch WebSocket 升級連 `https://<H>/`，帶 service token headers，WS binary frame 作為 SSH 傳輸層。無 Access 政策的公開 tunnel hostname 也適用（token 可留空）。
+4. Service token（CF-Access-Client-Id/Secret）：每連線內嵌，與密碼同等加密儲存；`clientSecret` 永不出現在 API 回應（比照 password/privateKey 脫敏）。補充說明：token 需在 Cloudflare Zero Trust 後台（Service Tokens）建立，非本機 `~/.cloudflared/` 的瀏覽器 JWT。
+5. 白名單外 `-o` 選項：儲存時拒絕（400 + 列出不支援的選項名），不靜默忽略。
+6. Access 代理通道驗收：僅自動化測試（解析、設定轉換、mock WS transport 讀寫關閉）；真實 Access 環境由使用者日後實測。
+7. 排程：先完成本功能，再回頭做速度優化（第二十二節），最後合併一次全量回歸。
+8. **README 必須新增本功能文件**（選項清單、cloudflared Access 用法、service token 建立位置、匯入指令範例）。
+
+### 可觀察行為與驗收條件
+
+1. `ssh -p 2222 -o ServerAliveInterval=60 -o ProxyCommand="cloudflared access ssh --hostname loc-ssh.czy-cf.eu.cc" user@host` 貼上解析：port/username/host/選項正確填入；`ProxyCommand` 顯示為 Access 代理區塊（hostname/destination），非文字選項。
+2. 白名單選項值驗證：ServerAliveInterval/ServerAliveCountMax/ConnectTimeout 為合理整數區間；Ciphers/MACs/KexAlgorithms/HostKeyAlgorithms 為非空逗號清單（演算法有效性由 Go 端連線時把關）；ProxyCommand 僅接受 cloudflared access ssh 形態；未知選項儲存回 400 並列出選項名。
+3. Go 端：ClientConfig 套用 Ciphers/MACs/KexAlgorithms/HostKeyAlgorithms/ConnectTimeout；ServerAliveInterval>0 時定期發送 `keepalive@openssh.com` global request，連續 ServerAliveCountMax 次無回應視為斷線。原生 dial 測試覆蓋（testserver 計數 keepalive）。
+4. Worker 端：accessProxy 存在時 DO 不走 `cloudflare:sockets`，改以 fetch WS 升級建立通道並包成與 WorkerTcpTransport 同介面的 transport；TOFU/quota/生命週期契約不變。
+5. `ConnectionView` 與所有 API 回應不含 `accessProxy.clientSecret`；編輯時 secret 欄位空白保留語意與密碼一致。
+6. 前端表單：SSH 選項逐行輸入 + 匯入框 + Access 區塊（hostname/destination/clientId/clientSecret）編輯與顯示；儲存/編輯 round-trip 不遺失。
+7. README 新增章節涵蓋：支援選項表、cloudflared Access 通道說明、service token 建立步驟、指令匯入範例、不支援選項清單（含原因）。
+8. 全量回歸（與速度優化合併）：前端、Worker、Go 測試、typecheck、build、check:split 全綠；本機 Wrangler 8787 與 SSH fixture 2222 保持運行。
+
+## 二十四、Web UI 選中判定缺陷修復（2026-08-26）
+
+> 觸發：使用者反映「web-ui 的選中判定是不是有點問題」。調查以 Playwright 對本機 wrangler dev 實測重現，並經代碼審查定位根因。
+
+### 已確認需求與決策
+
+1. 缺陷（已實證重現）：勾選主機後，若其中一台被另一分頁/裝置移走或刪除，本分頁任何操作觸發清單重拉後——(a) 全選框顯示「已全選」但清單上有主機未勾（假全選，因 `count === length` 碰巧成立）；(b) count > length 時全選框呈現全未選樣式但計數 N 筆且按鈕啟用（矛盾）；(c) 假全選態下點擊全選框（true→false）反而清空所有勾選；(d) 拖曳 dragstart 與「移動所選」會把幽靈 id 帶進 moveConnections。
+2. 根因：`main.ts renderSelectionBar`（count===length / count<length 絕對數量比對）與 `dragstart`（selected.includes → 全量帶走）以 selected Set 絕對內容判定；selected 從不修剪清單外 id（跨分頁同步場景本地操作路徑皆已清理，唯獨清單重拉沒有）。
+3. 修復方案（使用者已選）：**雙層修復**——(A) 根本層：`FolderBrowserState.replaceScope` 同 folderId 時把 selected 修剪為 ∩ scope.connections；(B) 顯示層雙保險：`renderSelectionBar`/`selection-move`/`dragstart`/單卡勾選恢復改以「selected ∩ 當前清單 id」計算。
+4. 計數語意（使用者已選）：**交集計數**——「已選取 N 筆」只計當前清單內的有效選中，與全選框判定一致。
+5. 語意取捨：修剪會丟失「已不在本清單」的勾選——該勾選對本清單操作本無意義（跨資料夾情境 selected 本來就會在切換時清空），故合理。
+
+### 可觀察行為與驗收條件
+
+1. TDD：`folder-browser-state.test.ts` 先 RED——replaceScope 同 folderId 時修剪 selected ∩ connections（幽靈移除、有效保留）；selectedConnectionIds(visibleIds) 交集過濾。
+2. main.ts：renderSelectionBar 的全選/半選/計數/按鈕 disabled、selection-move 的 ids、dragstart 的 dataTransfer、單卡 checkbox 恢復，全部改用交集計算。
+3. 瀏覽器復驗（Playwright，本機 dev）：重現步驟（勾選→API 移走一台→建資料夾觸發重拉）後，全選框不再假全選、計數為有效交集數、拖曳/移動僅含清單內 id。
+ 4. 回歸：前端全量 vitest、typecheck、build、check:split 全綠；既有正常選中路徑行為不變（選 1→半選、全選→checked、取消→半選）。
+
+### 後續調整（2026-08-26）：選取 bar 顯示規則
+
+> 觸發：使用者追問「都『已選取 0 筆』了為什麼那個 ui 還在」——renderSelectionBar 原以 `connections.length === 0` 決定顯示，清單有主機就常駐整條 bar（含 0 筆計數與 disabled 按鈕），造成視覺噪音。
+
+1. 決策（使用者已選）：**bar 只在選取數 > 0 時出現**；「全選本頁」checkbox 搬到「主機」區塊標題列（與台數計數同側），作為 0 筆時的全選入口；清單為空時全選控制一併隱藏。
+2. 驗收：(a) HTML contract 測試——selection-all 不在 selection-bar 區段內、位於主機 section heading；(b) main.ts renderSelectionBar 改「count === 0 隱藏 bar」+「connections.length === 0 隱藏全選控制」；(c) Playwright 復驗 0 筆 bar 消失、勾一台 bar 出現、標題列全選可用；(d) 回歸前端全量+typecheck+build+check:split。
