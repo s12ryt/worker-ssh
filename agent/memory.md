@@ -357,3 +357,15 @@
 - 教訓：(1) `packageManager`與CI顯式npm版本必須同時固定，不能依賴setup-node附帶版本；(2)乾淨checkout是發現未提交fixture與generated artifact依賴的必要測試；(3)測試assets應自包含，正式generated WASM則由workflow顯式build，兩者不可混為同一種修法。
 - 服務確認：Wrangler parent63648/listener48152與SSH fixture27768保持運行，未為clean install或推送而停止。
 
+## 2026-08-25 Cloudflare production v3 加密信封相容性修復（任務 20）
+
+- Production deployment成功後，建立folder與connection同時失敗、settings成功。先用路徑交集定位：前兩者會加密，settings為D1明文結構欄位；D1 binding/schema本身不是根因。
+- 查證Cloudflare production PBKDF2 iterations上限100,000，而v2固定210,000。這解釋本機新runtime全綠、production加密失敗的環境差異。使用者確認`ENCRYPTION_KEY`是100字元高熵亂數，故可安全採HKDF，而不是降低PBKDF2成本。
+- 契約寫入`agent/question.md`第二十一節：新寫v3 HKDF、保留v1/v2讀取分支、production legacy限制、安全錯誤分類、高熵README、push-only不部署。
+- TDD：加入historical v2 fixture與production cap spy；RED為103測中9項缺v3行為。GREEN後`crypto.ts`使用HKDF-SHA256 domain-separated salt/info/AAD + AES-256-GCM random IV，新寫入完全不呼PBKDF2；cache仍以Promise去重並限制16 entries。
+- Migration：KV marker升`migration:connections:v3`，v1/v2都改寫v3；D1 bootstrap不再保留v2。v1/v2 decrypt仍使用歷史PBKDF2210k，只在支援該上限的runtime可讀。
+- API：新增`EncryptionOperationError`/`ENCRYPTION_UNAVAILABLE`，建立folder/host若crypto不可用時不再只顯示`database operation failed`，也不暴露底層例外文字。
+- 驗證：clean worktree目標103/103，另有安全加密錯誤HTTP回歸；完整deployment20/frontend295/Worker145/Go/typecheck/build/split全綠，LSP0 diagnostics。隔離Wrangler8788真實建立folder201、connection201、無secret response、清理204。
+- 主工作區8787保留listener但受先前EBUSY造成的不完整node_modules影響，source watch後HTTP暫時卡住；本輪沒有為驗證停止既有服務，而使用clean worktree的8788臨時實例。後續可在允許停機時重裝node_modules並重啟本機dev server。
+- 教訓：(1) WebCrypto演算法可用不代表所有參數在production/runtime皆同上限，必須加入production-limit回歸；(2)高熵根金鑰適合HKDF，使用者密碼才需要PBKDF2/Argon2等password KDF；(3)一般database error會遮蔽crypto根因，跨層錯誤必須安全但可分類；(4)version marker升級必須同步KV marker、bootstrap與fixture，否則舊complete marker會跳過新遷移。
+

@@ -521,3 +521,20 @@
 - **本機環境區分**：主工作區的實際 `npm ci` 因仍運行的 Wrangler 鎖住 Windows `node_modules` 而遭 EBUSY 並留下不完整安裝；未停止服務，而是用隔離 worktree取得clean-install證據。這不是 lockfile 或正式碼失敗。
 - **提交與遠端驗證**：`2d9bf5c` 建立自包含Worker測試、`a8918de`固定npm與workflow、`ef44dc3`同步文件，均已推送 `main`。遠端workflow顯示npm11 setup與build-before-test；Actions清單仍只有原手動失敗run `32802591933`，push未自動觸發production。
 - **環境與服務**：本機runtime仍有compatibility date fallback與Windows Miniflare temp EBUSY cleanup警告。Wrangler parent PID63648／listener PID48152持續服務 `http://127.0.0.1:8787`；SSH fixture PID27768持續監聽`127.0.0.1:2222`。
+
+---
+
+## 任務 20：Cloudflare production v3 加密信封相容性修復（✅ 已完成 2026-08-25）
+
+- **來源與根因**：production workflow部署成功後，使用者回報建立資料夾與SSH主機均回 `database operation failed`，但D1 settings可正常保存。交叉比對共同路徑後確認只有前兩者會先執行加密；Cloudflare production限制PBKDF2最高100,000 iterations，而v2固定使用210,000，導致production加密失敗。契約見`agent/question.md`第二十一節。
+- **決策**：使用者確認`ENCRYPTION_KEY`為密碼管理器產生的100字元高熵隨機值，選擇以HKDF-SHA256建立v3信封。不得讀取或輸出實際key；本輪只push main，不觸發production workflow。
+- **RED證據**：新增production cap模擬、v1/v2 fixture、v3格式、D1/KV/Bootstrap/HTTP migration測試。隔離clean worktree有效RED為6檔103測試中9項失敗，其餘94通過；失敗均精準指向新寫入仍為v2、PBKDF2 210k遭拒絕、marker與migration未升v3。
+- **GREEN實作**：
+  - [x] `crypto.ts`新增`v3:`：domain-separated HKDF salt/info/AAD、AES-256-GCM、每筆獨立96-bit IV；同isolate以Promise-LRU去重衍生。
+  - [x] v1/v2版本化解密保留；歷史PBKDF2只在runtime允許210k時可讀。新寫入不再呼叫PBKDF2。
+  - [x] KV marker升為`migration:connections:v3`；v1/v2皆有界循序重加密為v3，既有v3不改。D1 bootstrap同樣改寫v1/v2。
+  - [x] API對加密操作失敗回安全`ENCRYPTION_UNAVAILABLE`，不洩漏底層crypto錯誤；README新增高熵根金鑰要求。
+- **GREEN與回歸**：目標6檔103/103，另補加密provider安全錯誤HTTP回歸；typecheck與LSP0 diagnostics。clean完整回歸deployment20/20、frontend295/295、Worker145/145、Go PASS、build與check:split PASS。Worker bundle126.5KB、app約122KB、terminal284.9KB。
+- **真實Wrangler驗證**：因主工作區node_modules受仍運行的Wrangler鎖定且熱更新後8787暫時無HTTP回應，未停止既有服務；改以clean worktree在8788啟動隔離Wrangler。登入/bootstrap後folder POST 201、connection POST 201、response無secret欄位、recursive cleanup 204。
+- **相容性邊界**：fresh production D1沒有成功建立的舊加密row。v1/v2可相容讀取程式仍存在，但Cloudflare production無法保證直接解密歷史PBKDF2 210k信封；若未來有此類production資料，需在可支援舊KDF的離線/本機環境先遷移為v3。
+- **環境與發布**：本機runtime仍fallback compatibility date 2025-09-06，Windows Miniflare仍有temp EBUSY警告但suite全綠。修復將推送main，依使用者決策不由本輪觸發Cloudflare部署。
