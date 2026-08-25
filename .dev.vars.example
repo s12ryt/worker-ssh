@@ -1,0 +1,3 @@
+# 本地開發用 secrets（複製為 .dev.vars 後修改；.dev.vars 不入版控）
+PANEL_PASSWORD=change-me-panel-password
+ENCRYPTION_KEY=change-me-encryption-key

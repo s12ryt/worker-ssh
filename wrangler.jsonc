@@ -1,0 +1,40 @@
+// Cloudflare Workers 設定
+// 部署前必須：
+//   1. 建立 KV namespace：npx wrangler kv namespace create KV
+//      並將 id 換成輸出的真實 id
+//   2. 建立 D1 database：npx wrangler d1 create worker-ssh
+//      並將 database_id 換成輸出的真實 id
+//   3. 設定 secrets：npx wrangler secret put PANEL_PASSWORD
+//                    npx wrangler secret put ENCRYPTION_KEY
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "worker-ssh",
+  "main": "dist/worker/index.js",
+  "compatibility_date": "2026-08-01",
+  "assets": {
+    "directory": "dist/client",
+    "binding": "ASSETS"
+  },
+  "kv_namespaces": [
+    { "binding": "KV", "id": "REPLACE_WITH_YOUR_KV_NAMESPACE_ID" }
+  ],
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "worker-ssh",
+      "database_id": "00000000-0000-0000-0000-000000000000",
+      "preview_database_id": "worker-ssh-local"
+    }
+  ],
+  "durable_objects": {
+    "bindings": [
+      { "name": "SSH_SESSIONS", "class_name": "SshSessionObject" },
+      { "name": "SSH_QUOTA", "class_name": "SshQuotaObject" }
+    ]
+  },
+  "migrations": [
+    { "tag": "v1", "new_sqlite_classes": ["SshSessionObject"] },
+    { "tag": "v2", "new_sqlite_classes": ["SshQuotaObject"] }
+  ],
+  "observability": { "enabled": true }
+}
