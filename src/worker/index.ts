@@ -31,6 +31,7 @@ import {
   type NewD1Connection,
 } from "./d1-store";
 import { AppSettingsStore } from "./settings-store";
+import { EncryptionOperationError } from "./crypto";
 import {
   connectInitializedSshSession,
   SshSessionInitializationError,
@@ -239,6 +240,15 @@ function d1Store(env: Env): D1ConnectionStore {
 }
 
 function d1Error(error: unknown): Response {
+  if (error instanceof EncryptionOperationError) {
+    return json(
+      {
+        error: "encryption operation failed",
+        code: error.code,
+      },
+      500,
+    );
+  }
   if (error instanceof RecordNotFoundError) {
     return json({ error: "not found" }, 404);
   }

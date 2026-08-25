@@ -1,7 +1,7 @@
 import { env, SELF } from "cloudflare:test";
 import { describe, expect, it, vi } from "vitest";
 import { encryptLegacyV1 } from "./crypto-fixtures";
-import { decryptString } from "../../../src/worker/crypto";
+import { decryptString, resetKeyCache } from "../../../src/worker/crypto";
 
 /**
  * index.ts HTTP 路由整合測試
@@ -696,6 +696,43 @@ describe("連線 CRUD（需登入）", () => {
 });
 
 describe("資料夾與 scoped API（需登入且初始化完成）", () => {
+  it("加密provider失敗時回安全錯誤分類且不洩漏底層訊息", async () => {
+    const cookie = await loginCookie();
+    resetKeyCache();
+    const originalDeriveKey = crypto.subtle.deriveKey.bind(crypto.subtle) as (
+      ...args: Parameters<SubtleCrypto["deriveKey"]>
+    ) => ReturnType<SubtleCrypto["deriveKey"]>;
+    const derive = vi
+      .spyOn(crypto.subtle, "deriveKey")
+      .mockImplementation((...args: Parameters<SubtleCrypto["deriveKey"]>) => {
+        const derivedKeyType = args[2];
+        if (
+          typeof derivedKeyType !== "string" &&
+          derivedKeyType.name === "AES-GCM"
+        ) {
+          return Promise.reject(new Error("sensitive provider detail"));
+        }
+        return originalDeriveKey(...args);
+      });
+
+    try {
+      const response = await SELF.fetch(
+        "https://example.com/api/folders",
+        withCookie(jsonInit("POST", { name: "Encryption failure" }), cookie),
+      );
+      expect(response.status).toBe(500);
+      const body = await response.json();
+      expect(body).toEqual({
+        error: "encryption operation failed",
+        code: "ENCRYPTION_UNAVAILABLE",
+      });
+      expect(JSON.stringify(body)).not.toContain("sensitive provider detail");
+    } finally {
+      derive.mockRestore();
+      resetKeyCache();
+    }
+  });
+
   it("GET /api/folders 只回資料夾摘要供移動目的地選擇", async () => {
     const cookie = await loginCookie();
     await SELF.fetch(
@@ -896,7 +933,7 @@ describe("連線加密遷移 API（需登入）", () => {
       migrated: 1,
       failed: 0,
     });
-    expect((await env.KV.get("conn:legacy-http"))?.startsWith("v2:")).toBe(true);
+    expect((await env.KV.get("conn:legacy-http"))?.startsWith("v3:")).toBe(true);
 
     const list = await SELF.fetch(
       "https://example.com/api/connections",
