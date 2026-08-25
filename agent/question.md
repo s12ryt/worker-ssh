@@ -730,3 +730,26 @@
 4. 建立原子提交並推送 `main`，確認本機 `HEAD` 與 `origin/main` 一致、工作樹乾淨；GitHub workflow 保持 active，且修復推送不會因 workflow 僅有 `workflow_dispatch` 而自動產生新 run。
 5. 本機 Wrangler `http://127.0.0.1:8787` 與 SSH fixture `127.0.0.1:2222` 必須保持運行。
 6. Worker 測試設定必須指向已提交的 fixture，並以 HTTP fallback 測試證明 `ASSETS` 可用。隔離 worktree 的真實驗證順序為 `npm ci` → `npm run build`／`npm run check:split` → `npm test`；build 產生 Go WASM，但測試 ASSETS 仍只使用已提交的 fixture。
+
+## 二十一、Cloudflare production 加密信封相容性修復（2026-08-25）
+
+> 觸發：production 部署完成後，初始化可完成且一般設定可保存，但建立根目錄資料夾與 SSH 主機皆回 `database operation failed`。唯讀調查確認 D1、KV、assets、Durable Object 與 Worker deployment 均成功；兩個失敗路徑的共同點是第一次執行 AES-GCM 信封加密。
+
+### 已確認根因、需求與決策
+
+1. 現有 v2 信封使用 PBKDF2-SHA256 `210,000` iterations；Cloudflare production Web Crypto 對單次 PBKDF2 iterations 的限制為 `100,000`，因此正式環境拒絕衍生金鑰。本機較新的 workerd 能通過，造成 local/production 行為落差。
+2. 使用者的 `ENCRYPTION_KEY` 為密碼產生器生成的 100 字元隨機字串，符合高熵根金鑰前提；不得讀取、輸出、複製或記錄實際內容。
+3. 新寫入改為明確版本 `v3:` 信封，使用 HKDF-SHA256 由高熵 `ENCRYPTION_KEY` 衍生 AES-256-GCM key；採獨立 domain-separated salt／info／AAD，每筆維持獨立 96-bit 隨機 IV。
+4. v1 裸信封與 v2 `v2:` 信封的解密程式碼保留，避免破壞可支援舊 PBKDF2 iterations 的既有本機資料；新資料與舊資料重新寫入後一律使用 v3。由於 Cloudflare production 本身拒絕 v1/v2 的 210,000 iterations，正式環境不得宣稱可直接匯入這類舊信封；本次 production D1 為新建且尚無成功建立的 encrypted folder/connection rows。
+5. D1 schema、folder／connection 公開 API、credential redaction、bootstrap、settings、Backend SSH、KV 與 Durable Object 契約保持不變。
+6. 非預期加密錯誤需分類為不含 secret／stack／原始 crypto message 的安全錯誤碼，不再誤導為純 D1 database failure；正常成功回應不增加敏感診斷資訊。
+7. 修復完成後建立原子提交並推送 `main`；依使用者決策，不代為觸發 production workflow，由使用者自行手動重新部署。
+
+### 可觀察行為與驗收條件
+
+1. 先建立 RED 測試：新信封必須為 v3、使用 HKDF 而非 PBKDF2；模擬 production 拒絕 `PBKDF2 iterations > 100,000` 時，建立連線與資料夾所需的加密仍可成功。
+2. 測試覆蓋 v3 round-trip、獨立 IV、錯誤金鑰、竄改、非法格式與金鑰快取；另以 fixture 證明 v1/v2 解密分支仍存在且版本辨識正確。
+3. D1 store 與 HTTP 整合測試證明 connection `payload_envelope`、folder `name_envelope` 新寫入皆以 `v3:` 開頭，建立簡單根資料夾與 password connection 均成功且公開回應不含 credentials。
+4. README／部署文件明確要求 `ENCRYPTION_KEY` 使用密碼管理器或密碼學安全亂數生成的高熵值，不建議人類可讀長句或規律字串。
+5. 執行 deployment、frontend、Worker、Go、typecheck、build、check:split 與 LSP；以本機 Wrangler 重現建立根資料夾與 SSH 主機成功，且既有 `http://127.0.0.1:8787` 與 SSH fixture `127.0.0.1:2222` 保持運行。
+6. 推送後確認 `HEAD === origin/main`、工作樹乾淨、GitHub Actions workflow 維持手動觸發且沒有由 push 產生新的 production run。
