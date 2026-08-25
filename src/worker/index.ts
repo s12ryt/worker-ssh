@@ -21,6 +21,7 @@ import { LoginRateLimiter, loginSourceOf } from "./login-rate-limit";
 import { DatabaseBootstrap, type BootstrapStatus } from "./d1-bootstrap";
 import {
   CredentialRequiredError,
+  AccessSecretRequiredError,
   D1ConnectionStore,
   DuplicateFolderNameError,
   FolderCycleError,
@@ -30,12 +31,22 @@ import {
   type D1ConnectionPatch,
   type NewD1Connection,
 } from "./d1-store";
+import {
+  validateAccessProxy,
+  validateAccessProxyShape,
+  validateSshOptions,
+} from "../shared/ssh-options";
 import { AppSettingsStore } from "./settings-store";
 import { EncryptionOperationError } from "./crypto";
 import {
   connectInitializedSshSession,
+  sshSessionDoName,
   SshSessionInitializationError,
 } from "./ssh-session-init";
+import {
+  readDbReadyCache,
+  writeDbReadyCache,
+} from "./db-ready-cache";
 
 export { SshSessionObject } from "./backend-ssh-do";
 export { SshQuotaObject } from "./ssh-quota-do";
@@ -121,26 +132,41 @@ function bootstrapLocked(status: BootstrapStatus): Response {
 }
 
 async function requireDatabaseReady(env: Env): Promise<Response | null> {
+  const now = Date.now();
+  if (readDbReadyCache(now)) return null;
   const status = await databaseBootstrap(env).status();
+  writeDbReadyCache(status.status === "complete", now);
   return status.status === "complete" ? null : bootstrapLocked(status);
 }
 
-/** 驗證並擷取新建連線欄位；非法回 null */
-function parseConnection(body: unknown): NewD1Connection | null {
-  if (typeof body !== "object" || body === null) return null;
+type ParseResult<T> = { ok: true; value: T } | { ok: false; error: string };
+
+/** 驗證並擷取新建連線欄位；非法回錯誤說明 */
+function parseConnection(body: unknown): ParseResult<NewD1Connection> {
+  if (typeof body !== "object" || body === null) {
+    return { ok: false, error: "invalid connection" };
+  }
   const b = body as Record<string, unknown>;
-  if (typeof b.name !== "string" || !b.name.trim()) return null;
-  if (typeof b.host !== "string" || !b.host.trim()) return null;
-  if (typeof b.username !== "string" || !b.username.trim()) return null;
+  if (typeof b.name !== "string" || !b.name.trim()) {
+    return { ok: false, error: "invalid connection" };
+  }
+  if (typeof b.host !== "string" || !b.host.trim()) {
+    return { ok: false, error: "invalid connection" };
+  }
+  if (typeof b.username !== "string" || !b.username.trim()) {
+    return { ok: false, error: "invalid connection" };
+  }
   if (
     typeof b.port !== "number" ||
     !Number.isInteger(b.port) ||
     b.port < 1 ||
     b.port > 65535
   ) {
-    return null;
+    return { ok: false, error: "invalid connection" };
   }
-  if (b.authType !== "password" && b.authType !== "privateKey") return null;
+  if (b.authType !== "password" && b.authType !== "privateKey") {
+    return { ok: false, error: "invalid connection" };
+  }
 
   const out: NewD1Connection = {
     name: b.name,
@@ -158,23 +184,44 @@ function parseConnection(body: unknown): NewD1Connection | null {
   ] as const) {
     const v = b[key];
     if (v === undefined || v === null) continue;
-    if (typeof v !== "string") return null;
+    if (typeof v !== "string") return { ok: false, error: "invalid connection" };
     out[key] = v;
   }
-  if (out.authType === "privateKey" && !out.privateKey) return null;
-  return out;
+  if (out.authType === "privateKey" && !out.privateKey) {
+    return { ok: false, error: "invalid connection" };
+  }
+
+  if (b.sshOptions !== undefined && b.sshOptions !== null) {
+    const options = validateSshOptions(b.sshOptions);
+    if (!options.ok) {
+      return { ok: false, error: options.error };
+    }
+    out.sshOptions = options.options;
+  }
+  if (b.accessProxy !== undefined && b.accessProxy !== null) {
+    const proxy = validateAccessProxy(b.accessProxy);
+    if (!proxy.ok) {
+      return { ok: false, error: proxy.error };
+    }
+    out.accessProxy = proxy.proxy;
+  }
+  return { ok: true, value: out };
 }
 
-/** 驗證並過濾更新欄位（白名單，防止覆蓋 id/createdAt）；非法回 null；null 值代表清除 */
-function sanitizePatch(body: unknown): D1ConnectionPatch | null {
-  if (typeof body !== "object" || body === null) return null;
+/** 驗證並過濾更新欄位（白名單，防止覆蓋 id/createdAt）；非法回錯誤說明；null 值代表清除 */
+function sanitizePatch(body: unknown): ParseResult<D1ConnectionPatch> {
+  if (typeof body !== "object" || body === null) {
+    return { ok: false, error: "invalid patch" };
+  }
   const b = body as Record<string, unknown>;
   const patch: D1ConnectionPatch = {};
 
   for (const field of ["name", "host", "username"] as const) {
     const v = b[field];
     if (v === undefined) continue;
-    if (typeof v !== "string" || !v.trim()) return null;
+    if (typeof v !== "string" || !v.trim()) {
+      return { ok: false, error: "invalid patch" };
+    }
     patch[field] = v;
   }
 
@@ -185,20 +232,22 @@ function sanitizePatch(body: unknown): D1ConnectionPatch | null {
       b.port < 1 ||
       b.port > 65535
     ) {
-      return null;
+      return { ok: false, error: "invalid patch" };
     }
     patch.port = b.port;
   }
 
   if (b.authType !== undefined) {
-    if (b.authType !== "password" && b.authType !== "privateKey") return null;
+    if (b.authType !== "password" && b.authType !== "privateKey") {
+      return { ok: false, error: "invalid patch" };
+    }
     patch.authType = b.authType;
   }
 
   for (const field of ["password", "privateKey", "passphrase"] as const) {
     const v = b[field];
     if (v === undefined) continue;
-    if (typeof v !== "string") return null;
+    if (typeof v !== "string") return { ok: false, error: "invalid patch" };
     patch[field] = v;
   }
 
@@ -209,7 +258,9 @@ function sanitizePatch(body: unknown): D1ConnectionPatch | null {
       patch[field] = null;
       continue;
     }
-    if (typeof v !== "string" || !v.trim()) return null;
+    if (typeof v !== "string" || !v.trim()) {
+      return { ok: false, error: "invalid patch" };
+    }
     patch[field] = v;
   }
 
@@ -221,10 +272,35 @@ function sanitizePatch(body: unknown): D1ConnectionPatch | null {
       patch[field] = null;
       continue;
     }
-    if (typeof v !== "number" || !Number.isFinite(v)) return null;
+    if (typeof v !== "number" || !Number.isFinite(v)) {
+      return { ok: false, error: "invalid patch" };
+    }
     patch[field] = v;
   }
-  return patch;
+
+  // SSH 選項：undefined=保留（不設）、null=清除、陣列=驗證後替換
+  if (b.sshOptions !== undefined) {
+    if (b.sshOptions === null) {
+      patch.sshOptions = null;
+    } else {
+      const options = validateSshOptions(b.sshOptions);
+      if (!options.ok) return { ok: false, error: options.error };
+      patch.sshOptions = options.options;
+    }
+  }
+
+  // Access 代理：undefined=保留、null=清除、物件=寬鬆形狀驗證（secret 可沿用既有值）
+  if (b.accessProxy !== undefined) {
+    if (b.accessProxy === null) {
+      patch.accessProxy = null;
+    } else {
+      const proxy = validateAccessProxyShape(b.accessProxy);
+      if (!proxy.ok) return { ok: false, error: proxy.error };
+      patch.accessProxy = proxy.proxy;
+    }
+  }
+
+  return { ok: true, value: patch };
 }
 
 function parseFolderId(value: unknown): string | null | undefined {
@@ -258,7 +334,8 @@ function d1Error(error: unknown): Response {
   if (
     error instanceof FolderCycleError ||
     error instanceof FolderDepthError ||
-    error instanceof CredentialRequiredError
+    error instanceof CredentialRequiredError ||
+    error instanceof AccessSecretRequiredError
   ) {
     return json({ error: error.message }, 400);
   }
@@ -314,14 +391,17 @@ async function handleConnections(
       if (req.method === "POST") {
         const body = await readJson(req);
         const parsed = parseConnection(body);
-        if (!parsed) return json({ error: "invalid connection" }, 400);
+        if (!parsed.ok) return json({ error: parsed.error }, 400);
         const values = body as Record<string, unknown>;
         const hasFolderId = Object.hasOwn(values, "folderId");
         const folderId = parseFolderId(values.folderId);
         if (hasFolderId && folderId === undefined) {
           return json({ error: "invalid folder id" }, 400);
         }
-        return json(await store.createConnection(parsed, folderId ?? null), 201);
+        return json(
+          await store.createConnection(parsed.value, folderId ?? null),
+          201,
+        );
       }
       return json({ error: "method not allowed" }, 405);
     }
@@ -333,8 +413,8 @@ async function handleConnections(
     }
     if (req.method === "PUT") {
       const patch = sanitizePatch(await readJson(req));
-      if (!patch) return json({ error: "invalid patch" }, 400);
-      const updated = await store.updateConnection(connId, patch);
+      if (!patch.ok) return json({ error: patch.error }, 400);
+      const updated = await store.updateConnection(connId, patch.value);
       return updated ? json(updated) : json({ error: "not found" }, 404);
     }
     if (req.method === "DELETE") {
@@ -636,9 +716,12 @@ async function handleSsh(req: Request, env: Env, url: URL): Promise<Response> {
 
   const connectionId = url.searchParams.get("connectionId")?.trim();
   if (!connectionId) return json({ error: "connection id required" }, 400);
-  const store = d1Store(env);
-  const view = await store.getConnection(connectionId);
-  if (!view) return json({ error: "not found" }, 404);
+
+  // 單次 D1 查詢同時取 view＋config（原本為兩次查詢＋兩次解密）。
+  // quota acquire 維持在 404/409/426 檢查之後：錯誤請求不產生 DO 副作用。
+  const result = await d1Store(env).getConnectionWithInternal(connectionId);
+  if (!result) return json({ error: "not found" }, 404);
+  const { view, config } = result;
   if (view.credentialState !== "ready") {
     return json({ error: "credential missing" }, 409);
   }
@@ -646,8 +729,6 @@ async function handleSsh(req: Request, env: Env, url: URL): Promise<Response> {
     return json({ error: "websocket upgrade required" }, 426);
   }
 
-  const config = await store.getConnectionInternal(connectionId);
-  if (!config) return json({ error: "not found" }, 404);
   const quota = {
     sessionKey: await sessionQuotaKey(token),
     leaseId: crypto.randomUUID(),
@@ -669,9 +750,9 @@ async function handleSsh(req: Request, env: Env, url: URL): Promise<Response> {
         body: JSON.stringify(quota),
       })
       .catch(() => undefined);
-  const stub = env.SSH_SESSIONS.getByName(
-    `ssh-${connectionId}-${crypto.randomUUID()}`,
-  );
+  // DO 名稱由 connectionId 衍生（穩定）：同一連線重複連線時命中暖 isolate，
+  // 免逐次冷啟動與 7.9MB WASM instantiate；DO 無跨請求狀態，重用安全。
+  const stub = env.SSH_SESSIONS.getByName(sshSessionDoName(connectionId));
   let connected: Response;
   try {
     connected = await connectInitializedSshSession(stub, { config, quota });

@@ -2,6 +2,7 @@ import { env, SELF } from "cloudflare:test";
 import { describe, expect, it, vi } from "vitest";
 import { encryptLegacyV1 } from "./crypto-fixtures";
 import { decryptString, resetKeyCache } from "../../../src/worker/crypto";
+import { resetDbReadyCache } from "../../../src/worker/db-ready-cache";
 
 /**
  * index.ts HTTP 路由整合測試
@@ -293,6 +294,9 @@ describe("D1 初始化 API", () => {
   });
 
   it("初始化完成前拒絕連線與資料夾 CRUD", async () => {
+    // isolatedStorage 會回滾 D1，但 isolate 內的 module 記憶體不回滾；
+    // 此測試模擬「未 bootstrap」狀態，需同步重置就緒快取以還原語意。
+    resetDbReadyCache();
     const cookie = await loginCookie(false);
     const connections = await SELF.fetch(
       "https://example.com/api/connections",
@@ -327,6 +331,8 @@ describe("全域設定 API", () => {
   });
 
   it("初始化完成前拒絕讀寫設定", async () => {
+    // 同上：重置就緒快取以模擬未 bootstrap 的隔離環境。
+    resetDbReadyCache();
     const cookie = await loginCookie(false);
     const res = await SELF.fetch(
       "https://example.com/api/settings",
