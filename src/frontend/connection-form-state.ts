@@ -1,4 +1,10 @@
 import type { AuthType, ConnectionView } from "../shared/types";
+import {
+  validateAccessProxyShape,
+  validateSshOption,
+  type AccessProxyConfig,
+  type SshOption,
+} from "../shared/ssh-options";
 
 export interface ConnectionFormValues {
   name: string;
@@ -9,6 +15,13 @@ export interface ConnectionFormValues {
   password: string;
   privateKey: string;
   passphrase: string;
+  /** SSH 選項：逐行 Key=Value（與 API 的 sshOptions[] 對應） */
+  sshOptionsText: string;
+  accessHostname: string;
+  accessDestination: string;
+  accessClientId: string;
+  /** 編輯時空白代表沿用已儲存 secret（API View 不回傳 secret，表單不重現） */
+  accessClientSecret: string;
 }
 
 export interface ConnectionSubmission {
@@ -20,6 +33,8 @@ export interface ConnectionSubmission {
   password?: string;
   privateKey?: string;
   passphrase?: string;
+  sshOptions?: SshOption[] | null;
+  accessProxy?: AccessProxyConfig | null;
 }
 
 /** API DTO 不含秘密；編輯表單也不應重現已保存憑證。 */
@@ -33,7 +48,58 @@ export function connectionFormValues(cfg?: ConnectionView): ConnectionFormValues
     password: "",
     privateKey: "",
     passphrase: "",
+    sshOptionsText: (cfg?.sshOptions ?? [])
+      .map((option) => `${option.key}=${option.value}`)
+      .join("\n"),
+    accessHostname: cfg?.accessProxy?.hostname ?? "",
+    accessDestination: cfg?.accessProxy?.destination ?? "",
+    accessClientId: cfg?.accessProxy?.clientId ?? "",
+    accessClientSecret: "",
   };
+}
+
+/** 解析逐行 Key=Value 文字；錯誤訊息附上行號（1-based） */
+function parseSshOptionsText(text: string): SshOption[] {
+  const options: SshOption[] = [];
+  const lines = text.split("\n");
+  for (let i = 0; i < lines.length; i += 1) {
+    const line = lines[i]!.trim();
+    if (!line) continue;
+    const eq = line.indexOf("=");
+    if (eq <= 0) {
+      throw new Error(`SSH 選項第 ${i + 1} 行缺少 Key=Value 格式`);
+    }
+    const result = validateSshOption(line.slice(0, eq), line.slice(eq + 1));
+    if (!result.ok) {
+      throw new Error(`${result.error}（第 ${i + 1} 行）`);
+    }
+    options.push(result.option);
+  }
+  return options;
+}
+
+function buildAccessProxySubmission(
+  existing: ConnectionView | undefined,
+  values: ConnectionFormValues,
+): AccessProxyConfig | null | undefined {
+  const hostname = values.accessHostname.trim();
+  if (!hostname) {
+    // 清空 hostname：編輯且原有代理 → 明確清除；否則不送欄位
+    return existing?.accessProxy ? null : undefined;
+  }
+  const trimmed: Record<string, string> = {
+    hostname,
+    ...(values.accessDestination.trim() ? { destination: values.accessDestination.trim() } : {}),
+    ...(values.accessClientId.trim() ? { clientId: values.accessClientId.trim() } : {}),
+    ...(values.accessClientSecret ? { clientSecret: values.accessClientSecret } : {}),
+  };
+  const shape = validateAccessProxyShape(trimmed);
+  if (!shape.ok) throw new Error(shape.error);
+  // 新建時 secret 無舊值可沿用，提前在前端擋下（編輯時空白 = 沿用後端已存值）
+  if (existing === undefined && shape.proxy.clientId && !shape.proxy.clientSecret) {
+    throw new Error("Access clientId 已設定時 clientSecret 必填");
+  }
+  return shape.proxy;
 }
 
 export function buildConnectionSubmission(
@@ -62,6 +128,16 @@ export function buildConnectionSubmission(
     if (values.privateKey.length > 0) submission.privateKey = values.privateKey;
     if (values.passphrase.length > 0) submission.passphrase = values.passphrase;
   }
+
+  const sshOptions = parseSshOptionsText(values.sshOptionsText);
+  if (sshOptions.length > 0) {
+    submission.sshOptions = sshOptions;
+  } else if (existing !== undefined) {
+    submission.sshOptions = null; // 全空 = 清除（新建時不送欄位）
+  }
+
+  const accessProxy = buildAccessProxySubmission(existing, values);
+  if (accessProxy !== undefined) submission.accessProxy = accessProxy;
 
   return submission;
 }

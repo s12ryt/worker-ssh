@@ -121,11 +121,20 @@ export async function createConnection(
 export type ConnectionPatch = Partial<
   Omit<
     ConnectionConfig,
-    "id" | "createdAt" | "updatedAt" | "hostKeyType" | "hostKeyFingerprint"
+    | "id"
+    | "createdAt"
+    | "updatedAt"
+    | "hostKeyType"
+    | "hostKeyFingerprint"
+    | "sshOptions"
+    | "accessProxy"
   >
 > & {
   hostKeyType?: string | null;
   hostKeyFingerprint?: string | null;
+  /** null 代表清除（與後端 PUT 語意一致） */
+  sshOptions?: ConnectionConfig["sshOptions"] | null;
+  accessProxy?: ConnectionConfig["accessProxy"] | null;
 };
 
 export async function updateConnection(
