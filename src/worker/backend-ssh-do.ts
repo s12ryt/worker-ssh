@@ -4,12 +4,15 @@ import { DurableObject } from "cloudflare:workers";
 import "../../dist/worker/wasm_exec.js";
 import sshWasm from "../../dist/worker/ssh.wasm";
 import type { ConnectionConfig } from "../shared/types";
+import { AccessWebSocketTransport } from "./access-ws-transport";
 import { runBackendSshProbe } from "./backend-ssh-probe";
 import { BackendSshSession } from "./backend-ssh-session";
 import {
   BackendSshRuntime,
   type GoRuntimeLike,
 } from "./backend-ssh-runtime";
+import { normalizeSshHostname } from "./ssh-host";
+import { decodeSessionConfigHeader } from "./ssh-session-init";
 import { WorkerTcpTransport } from "./worker-tcp-transport";
 
 export interface SshSessionEnv {
@@ -27,41 +30,6 @@ interface PendingSessionInit {
   quota: SshQuotaLeaseRef;
 }
 
-export const SESSION_INIT_TTL_MS = 10_000;
-
-export class OneTimeSessionInit<T> {
-  private value: { nonce: string; data: T } | null = null;
-  private expiryTimer: ReturnType<typeof setTimeout> | null = null;
-  private readonly nonceFactory: () => string;
-
-  constructor(options: { nonceFactory?: () => string } = {}) {
-    this.nonceFactory = options.nonceFactory ?? (() => crypto.randomUUID());
-  }
-
-  initialize(data: T): string {
-    this.clear();
-    const nonce = this.nonceFactory();
-    this.value = { nonce, data };
-    this.expiryTimer = setTimeout(() => {
-      if (this.value?.nonce === nonce) this.clear();
-    }, SESSION_INIT_TTL_MS);
-    return nonce;
-  }
-
-  consume(nonce: string): T | null {
-    if (!this.value || this.value.nonce !== nonce) return null;
-    const data = this.value.data;
-    this.clear();
-    return data;
-  }
-
-  private clear(): void {
-    if (this.expiryTimer) clearTimeout(this.expiryTimer);
-    this.expiryTimer = null;
-    this.value = null;
-  }
-}
-
 interface ProbeRequest {
   host: string;
   port: number;
@@ -75,6 +43,50 @@ interface GoRuntimeRegistry {
 
 function nonEmptyString(value: unknown): value is string {
   return typeof value === "string" && value.trim().length > 0;
+}
+
+interface SshOptionShape {
+  key: string;
+  value: string;
+}
+
+interface AccessProxyShape {
+  hostname: string;
+  destination?: string;
+  clientId?: string;
+  clientSecret?: string;
+}
+
+function isSshOptionShape(value: unknown): value is SshOptionShape {
+  if (typeof value !== "object" || value === null) return false;
+  const option = value as Record<string, unknown>;
+  return nonEmptyString(option.key) && typeof option.value === "string";
+}
+
+function isAccessProxyShape(value: unknown): value is AccessProxyShape {
+  if (typeof value !== "object" || value === null) return false;
+  const proxy = value as Record<string, unknown>;
+  if (!nonEmptyString(proxy.hostname)) return false;
+  if (
+    proxy.destination !== undefined &&
+    !nonEmptyString(proxy.destination)
+  ) {
+    return false;
+  }
+  if (proxy.clientId !== undefined && !nonEmptyString(proxy.clientId)) {
+    return false;
+  }
+  if (
+    proxy.clientSecret !== undefined &&
+    typeof proxy.clientSecret !== "string"
+  ) {
+    return false;
+  }
+  // DO 連線需要 clientSecret；clientId 已設定時 secret 不可為空字串
+  if (proxy.clientId !== undefined && proxy.clientSecret === "") {
+    return false;
+  }
+  return true;
 }
 
 export function isBackendConnectionConfig(
@@ -96,9 +108,29 @@ export function isBackendConnectionConfig(
   ) {
     return false;
   }
-  if (config.authType === "password") return nonEmptyString(config.password);
-  if (config.authType === "privateKey") return nonEmptyString(config.privateKey);
-  return false;
+  if (config.authType === "password") {
+    if (!nonEmptyString(config.password)) return false;
+  } else if (config.authType === "privateKey") {
+    if (!nonEmptyString(config.privateKey)) return false;
+  } else {
+    return false;
+  }
+  if (
+    config.sshOptions !== undefined &&
+    config.sshOptions !== null &&
+    (!Array.isArray(config.sshOptions) ||
+      !config.sshOptions.every(isSshOptionShape))
+  ) {
+    return false;
+  }
+  if (
+    config.accessProxy !== undefined &&
+    config.accessProxy !== null &&
+    !isAccessProxyShape(config.accessProxy)
+  ) {
+    return false;
+  }
+  return true;
 }
 
 export function isBackendSessionInit(value: unknown): value is PendingSessionInit {
@@ -112,6 +144,15 @@ export function isBackendSessionInit(value: unknown): value is PendingSessionIni
     nonEmptyString((quota as Record<string, unknown>).sessionKey) &&
     nonEmptyString((quota as Record<string, unknown>).leaseId)
   );
+}
+
+/** 從 X-Session-Config header 解出 session init；缺失或非法回 null。 */
+export function parseSessionConfigHeader(
+  header: string | null,
+): PendingSessionInit | null {
+  if (!header) return null;
+  const payload = decodeSessionConfigHeader<unknown>(header);
+  return payload !== null && isBackendSessionInit(payload) ? payload : null;
 }
 
 const registry = globalThis as unknown as GoRuntimeRegistry;
@@ -157,11 +198,8 @@ async function readProbeRequest(req: Request): Promise<ProbeRequest | null> {
 }
 
 export class SshSessionObject extends DurableObject<SshSessionEnv> {
-  private readonly pendingInit = new OneTimeSessionInit<PendingSessionInit>();
-
   override async fetch(req: Request): Promise<Response> {
     const url = new URL(req.url);
-    if (url.pathname === "/init") return this.initialize(req);
     if (url.pathname === "/connect") return this.connectSession(req);
     if (url.pathname !== "/probe") return json({ error: "not found" }, 404);
     if (req.method !== "POST") {
@@ -183,7 +221,7 @@ export class SshSessionObject extends DurableObject<SshSessionEnv> {
 
     const transport = new WorkerTcpTransport(
       connect(
-        { hostname: probe.host, port: probe.port },
+        { hostname: normalizeSshHostname(probe.host), port: probe.port },
         { allowHalfOpen: false },
       ),
     );
@@ -200,22 +238,6 @@ export class SshSessionObject extends DurableObject<SshSessionEnv> {
     }
   }
 
-  private async initialize(req: Request): Promise<Response> {
-    if (req.method !== "POST") {
-      return json({ error: "method not allowed" }, 405);
-    }
-    let input: unknown;
-    try {
-      input = await req.json();
-    } catch {
-      return json({ error: "invalid session config" }, 400);
-    }
-    if (!isBackendSessionInit(input)) {
-      return json({ error: "invalid session config" }, 400);
-    }
-    return json({ nonce: this.pendingInit.initialize(input) });
-  }
-
   private connectSession(req: Request): Response {
     if (req.method !== "GET") {
       return json({ error: "method not allowed" }, 405);
@@ -224,9 +246,10 @@ export class SshSessionObject extends DurableObject<SshSessionEnv> {
       return json({ error: "websocket upgrade required" }, 426);
     }
 
-    const nonce = new URL(req.url).searchParams.get("nonce") ?? "";
-    const pending = this.pendingInit.consume(nonce);
-    if (!pending) return json({ error: "session not initialized" }, 409);
+    const pending = parseSessionConfigHeader(
+      req.headers.get("X-Session-Config"),
+    );
+    if (!pending) return json({ error: "invalid session config" }, 400);
     const { config, quota } = pending;
     const pair = new WebSocketPair();
     const client = pair[0];
@@ -235,15 +258,21 @@ export class SshSessionObject extends DurableObject<SshSessionEnv> {
 
     this.ctx.waitUntil(
       (async () => {
-        let transport: WorkerTcpTransport | null = null;
+        let transport: WorkerTcpTransport | AccessWebSocketTransport | null =
+          null;
         let heartbeatTimer: ReturnType<typeof setInterval> | null = null;
         try {
-          transport = new WorkerTcpTransport(
-            connect(
-              { hostname: config.host, port: config.port },
-              { allowHalfOpen: false },
-            ),
-          );
+          transport = config.accessProxy
+            ? new AccessWebSocketTransport(config.accessProxy)
+            : new WorkerTcpTransport(
+                connect(
+                  {
+                    hostname: normalizeSshHostname(config.host),
+                    port: config.port,
+                  },
+                  { allowHalfOpen: false },
+                ),
+              );
           const engine = await runtime.load();
           const session = new BackendSshSession({
             engine,
