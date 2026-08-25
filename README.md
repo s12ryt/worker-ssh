@@ -32,9 +32,10 @@ Token 建議限制到單一 Cloudflare account，並只授予：
 | `CLOUDFLARE_API_TOKEN` | 查找／建立資源及部署 Worker |
 | `CLOUDFLARE_ACCOUNT_ID` | Cloudflare account identifier |
 | `PANEL_PASSWORD` | 網頁面板登入密碼 |
-| `ENCRYPTION_KEY` | D1 連線資料加密金鑰；部署後請勿任意更換 |
+| `ENCRYPTION_KEY` | D1 連線資料加密根金鑰；請使用密碼管理器或密碼學安全亂數產生的高熵隨機值，部署後請勿任意更換 |
 
 不要把 `.dev.vars`、Cloudflare token 或正式密碼提交到 repository。
+`ENCRYPTION_KEY` 不建議使用人類可讀長句、常見密碼或規律字串；目前加密信封以 HKDF-SHA256 從高熵根金鑰衍生 AES-256-GCM key。
 
 ### 3. 執行手動 workflow
 
