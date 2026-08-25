@@ -43,12 +43,13 @@ import (
 )
 
 type engineState struct {
-	mu      sync.Mutex
-	nextID  int
-	conns   map[int]*gossh.Client
-	shells  map[int]*ShellHandle
-	readers map[int]trackedReadHandle
-	writers map[int]trackedWriteHandle
+	mu              sync.Mutex
+	nextID          int
+	conns           map[int]*gossh.Client
+	keepaliveStops  map[int]func()
+	shells          map[int]*ShellHandle
+	readers         map[int]trackedReadHandle
+	writers         map[int]trackedWriteHandle
 }
 
 type trackedReadHandle struct {
@@ -67,11 +68,12 @@ type jsReadChunkResult struct {
 }
 
 var state = &engineState{
-	nextID:  1,
-	conns:   make(map[int]*gossh.Client),
-	shells:  make(map[int]*ShellHandle),
-	readers: make(map[int]trackedReadHandle),
-	writers: make(map[int]trackedWriteHandle),
+	nextID:         1,
+	conns:          make(map[int]*gossh.Client),
+	keepaliveStops: make(map[int]func()),
+	shells:         make(map[int]*ShellHandle),
+	readers:        make(map[int]trackedReadHandle),
+	writers:        make(map[int]trackedWriteHandle),
 }
 
 func allocID() int {
@@ -300,6 +302,21 @@ func jsConnect(this js.Value, args []js.Value) interface{} {
 		PrivateKey: getStr("privateKey"),
 		Passphrase: getStr("passphrase"),
 	}
+	// sshOptions：[{key, value}]（Worker 端已以白名單驗證）
+	if opts := cfgJS.Get("sshOptions"); opts.Type() == js.TypeObject && opts.Length() > 0 {
+		list := make([]SshOption, 0, opts.Length())
+		for i := 0; i < opts.Length(); i++ {
+			item := opts.Index(i)
+			key := item.Get("key")
+			value := item.Get("value")
+			if key.Type() == js.TypeString && value.Type() == js.TypeString {
+				list = append(list, SshOption{Key: key.String(), Value: value.String()})
+			}
+		}
+		if len(list) > 0 {
+			cfg.SshOptions = list
+		}
+	}
 	verifier := cfgJS.Get("verifyHostKey")
 	if verifier.Type() == js.TypeFunction {
 		cfg.HostKeyVerifier = func(hostname, keyType, fingerprint string) error {
@@ -316,13 +333,14 @@ func jsConnect(this js.Value, args []js.Value) interface{} {
 	transport := cfgJS.Get("transport")
 	return jsPromise(func() (interface{}, error) {
 		var client *gossh.Client
+		var stopKeepalive func()
 		var err error
 		if transport.Type() == js.TypeObject && !transport.Get("onData").IsUndefined() {
-			client, err = DialClientWithDialer(cfg, func(network, addr string) (net.Conn, error) {
+			client, stopKeepalive, err = DialClientWithDialer(cfg, func(network, addr string) (net.Conn, error) {
 				return NewWsConn(transport), nil
 			})
 		} else {
-			client, err = DialClient(cfg)
+			client, stopKeepalive, err = DialClient(cfg)
 		}
 		if err != nil {
 			return nil, err
@@ -330,6 +348,7 @@ func jsConnect(this js.Value, args []js.Value) interface{} {
 		id := allocID()
 		state.mu.Lock()
 		state.conns[id] = client
+		state.keepaliveStops[id] = stopKeepalive
 		state.mu.Unlock()
 		return id, nil
 	})
@@ -341,6 +360,10 @@ func jsDisconnect(this js.Value, args []js.Value) interface{} {
 	client, ok := state.conns[id]
 	if ok {
 		delete(state.conns, id)
+	}
+	stop, hasStop := state.keepaliveStops[id]
+	if hasStop {
+		delete(state.keepaliveStops, id)
 	}
 	readers := make([]*SftpReadHandle, 0)
 	for handleID, tracked := range state.readers {
@@ -362,6 +385,9 @@ func jsDisconnect(this js.Value, args []js.Value) interface{} {
 	}
 	for _, writer := range writers {
 		writer.Close()
+	}
+	if hasStop {
+		stop()
 	}
 	if ok {
 		client.Close()

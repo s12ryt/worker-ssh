@@ -11,7 +11,7 @@ import (
 
 func dialTestClient(t *testing.T, ts *testServer) *gossh.Client {
 	t.Helper()
-	c, err := DialClient(ConnConfig{
+	c, _, err := DialClient(ConnConfig{
 		Host:            hostOf(ts.addr),
 		Port:            portOf(ts.addr),
 		Username:        testUser,

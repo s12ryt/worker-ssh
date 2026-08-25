@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"net"
 	"strings"
 	"testing"
 )
@@ -9,7 +10,7 @@ import (
 // 契約：DialClient 以密碼認證成功建立 SSH 連線。
 func TestDialClientPassword(t *testing.T) {
 	ts := startTestServer(t)
-	client, err := DialClient(ConnConfig{
+	client, _, err := DialClient(ConnConfig{
 		Host:            hostOf(ts.addr),
 		Port:            portOf(ts.addr),
 		Username:        testUser,
@@ -26,7 +27,7 @@ func TestDialClientPassword(t *testing.T) {
 // 契約：錯誤密碼必須回傳錯誤。
 func TestDialClientWrongPassword(t *testing.T) {
 	ts := startTestServer(t)
-	client, err := DialClient(ConnConfig{
+	client, _, err := DialClient(ConnConfig{
 		Host:            hostOf(ts.addr),
 		Port:            portOf(ts.addr),
 		Username:        testUser,
@@ -43,7 +44,7 @@ func TestDialClientWrongPassword(t *testing.T) {
 // 契約：私鑰（PKCS8 ed25519）公鑰認證成功。
 func TestDialClientPrivateKey(t *testing.T) {
 	ts := startTestServer(t)
-	client, err := DialClient(ConnConfig{
+	client, _, err := DialClient(ConnConfig{
 		Host:            hostOf(ts.addr),
 		Port:            portOf(ts.addr),
 		Username:        testUser,
@@ -60,7 +61,7 @@ func TestDialClientPrivateKey(t *testing.T) {
 // 契約：加密私鑰＋正確 passphrase 認證成功。
 func TestDialClientEncryptedKeyWithPassphrase(t *testing.T) {
 	ts := startTestServer(t)
-	client, err := DialClient(ConnConfig{
+	client, _, err := DialClient(ConnConfig{
 		Host:            hostOf(ts.addr),
 		Port:            portOf(ts.addr),
 		Username:        testUser,
@@ -78,7 +79,7 @@ func TestDialClientEncryptedKeyWithPassphrase(t *testing.T) {
 // 契約：加密私鑰＋錯誤 passphrase 必須回傳錯誤。
 func TestDialClientEncryptedKeyWrongPassphrase(t *testing.T) {
 	ts := startTestServer(t)
-	client, err := DialClient(ConnConfig{
+	client, _, err := DialClient(ConnConfig{
 		Host:            hostOf(ts.addr),
 		Port:            portOf(ts.addr),
 		Username:        testUser,
@@ -96,7 +97,7 @@ func TestDialClientEncryptedKeyWrongPassphrase(t *testing.T) {
 // 契約：privateKey 認證但未提供私鑰 → 明確錯誤（非 panic）。
 func TestDialClientPrivateKeyMissing(t *testing.T) {
 	ts := startTestServer(t)
-	client, err := DialClient(ConnConfig{
+	client, _, err := DialClient(ConnConfig{
 		Host:            hostOf(ts.addr),
 		Port:            portOf(ts.addr),
 		Username:        testUser,
@@ -112,7 +113,7 @@ func TestDialClientPrivateKeyMissing(t *testing.T) {
 func TestDialClientHostKeyVerifierReceivesSHA256Fingerprint(t *testing.T) {
 	ts := startTestServer(t)
 	var gotHost, gotType, gotFingerprint string
-	client, err := DialClient(ConnConfig{
+	client, _, err := DialClient(ConnConfig{
 		Host:     hostOf(ts.addr),
 		Port:     portOf(ts.addr),
 		Username: testUser,
@@ -142,7 +143,7 @@ func TestDialClientHostKeyVerifierReceivesSHA256Fingerprint(t *testing.T) {
 
 func TestDialClientRejectsUntrustedHostKey(t *testing.T) {
 	ts := startTestServer(t)
-	client, err := DialClient(ConnConfig{
+	client, _, err := DialClient(ConnConfig{
 		Host:     hostOf(ts.addr),
 		Port:     portOf(ts.addr),
 		Username: testUser,
@@ -163,7 +164,7 @@ func TestDialClientRejectsUntrustedHostKey(t *testing.T) {
 
 func TestDialClientFailsClosedWithoutHostKeyVerifier(t *testing.T) {
 	ts := startTestServer(t)
-	client, err := DialClient(ConnConfig{
+	client, _, err := DialClient(ConnConfig{
 		Host:     hostOf(ts.addr),
 		Port:     portOf(ts.addr),
 		Username: testUser,
@@ -176,5 +177,77 @@ func TestDialClientFailsClosedWithoutHostKeyVerifier(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "host key") {
 		t.Fatalf("錯誤應說明 host key verifier 缺失，得到：%v", err)
+	}
+}
+
+// skipIfNoIPv6Loopback：環境不支援 [::1] 監聽時略過 IPv6 測試。
+func skipIfNoIPv6Loopback(t *testing.T) {
+	t.Helper()
+	ln, err := net.Listen("tcp", "[::1]:0")
+	if err != nil {
+		t.Skipf("環境不支援 IPv6 loopback：%v", err)
+	}
+	ln.Close()
+}
+
+// 契約：裸 IPv6 位址（::1）能以原生 dial 連線，TOFU hostname 為 [::1]:port。
+func TestDialClientIPv6Loopback(t *testing.T) {
+	skipIfNoIPv6Loopback(t)
+	ts := startTestServerOn(t, "[::1]:0")
+	var gotHost string
+	client, _, err := DialClient(ConnConfig{
+		Host:     hostOf(ts.addr), // "::1"
+		Port:     portOf(ts.addr),
+		Username: testUser,
+		AuthType: "password",
+		Password: testPassword,
+		HostKeyVerifier: func(hostname, _, _ string) error {
+			gotHost = hostname
+			return nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("裸 IPv6 位址應連線成功：%v", err)
+	}
+	defer client.Close()
+	if want := ts.addr; gotHost != want {
+		t.Errorf("TOFU hostname = %q，想要 %q", gotHost, want)
+	}
+}
+
+// 契約：帶方括號的 IPv6 host 視同裸位址——可連線且 TOFU hostname 一致。
+func TestDialClientBracketedIPv6HostMatchesBare(t *testing.T) {
+	skipIfNoIPv6Loopback(t)
+	ts := startTestServerOn(t, "[::1]:0")
+
+	dialAndCaptureHost := func(host string) string {
+		t.Helper()
+		var gotHost string
+		client, _, err := DialClient(ConnConfig{
+			Host:     host,
+			Port:     portOf(ts.addr),
+			Username: testUser,
+			AuthType: "password",
+			Password: testPassword,
+			HostKeyVerifier: func(hostname, _, _ string) error {
+				gotHost = hostname
+				return nil
+			},
+		})
+		if err != nil {
+			t.Fatalf("host %q 應連線成功：%v", host, err)
+		}
+		client.Close()
+		return gotHost
+	}
+
+	bareHost := dialAndCaptureHost(hostOf(ts.addr))       // "::1"
+	bracketedHost := dialAndCaptureHost("[" + hostOf(ts.addr) + "]") // "[::1]"
+
+	if bracketedHost != bareHost {
+		t.Errorf("方括號格式 TOFU hostname = %q，想要與裸格式一致 = %q", bracketedHost, bareHost)
+	}
+	if want := ts.addr; bareHost != want {
+		t.Errorf("TOFU hostname = %q，想要 %q", bareHost, want)
 	}
 }

@@ -17,6 +17,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 
 	"github.com/pkg/sftp"
@@ -39,9 +40,38 @@ type testServer struct {
 	rootDir            string
 	mu                 sync.Mutex
 	openConns          []net.Conn
+	keepaliveCount     atomic.Int64
+}
+
+// KeepaliveCount 回傳收到的 keepalive@openssh.com global request 次數。
+func (ts *testServer) KeepaliveCount() int {
+	return int(ts.keepaliveCount.Load())
+}
+
+// serveGlobalRequests 處理連線層 global request：keepalive 計數並回覆成功，
+// 其餘要求回覆失敗（等同 gossh.DiscardRequests 的 Reply(false) 行為）。
+func (ts *testServer) serveGlobalRequests(reqs <-chan *gossh.Request) {
+	for req := range reqs {
+		if req.Type == "keepalive@openssh.com" {
+			ts.keepaliveCount.Add(1)
+			if req.WantReply {
+				req.Reply(true, nil)
+			}
+			continue
+		}
+		if req.WantReply {
+			req.Reply(false, nil)
+		}
+	}
 }
 
 func startTestServer(t *testing.T) *testServer {
+	t.Helper()
+	return startTestServerOn(t, "127.0.0.1:0")
+}
+
+// startTestServerOn 在指定位址啟動測試伺服器（例如 "[::1]:0" 驗證 IPv6）。
+func startTestServerOn(t *testing.T, listenAddr string) *testServer {
 	t.Helper()
 
 	_, hostPriv, err := ed25519.GenerateKey(rand.Reader)
@@ -110,7 +140,7 @@ func startTestServer(t *testing.T) *testServer {
 	}
 	cfg.AddHostKey(hostSigner)
 
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	ln, err := net.Listen("tcp", listenAddr)
 	if err != nil {
 		t.Fatalf("監聽失敗：%v", err)
 	}
@@ -162,7 +192,7 @@ func (ts *testServer) handleConn(c net.Conn, cfg *gossh.ServerConfig) {
 		return
 	}
 	defer sconn.Close()
-	go gossh.DiscardRequests(reqs)
+	go ts.serveGlobalRequests(reqs)
 	for newChan := range chans {
 		if newChan.ChannelType() != "session" {
 			newChan.Reject(gossh.UnknownChannelType, "僅支援 session")
