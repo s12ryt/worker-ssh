@@ -24,6 +24,13 @@ jobs:
           node-version: 22
           cache: npm
 
+      - name: Set up npm
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm install --global npm@11.7.0
+          test "$(npm --version)" = "11.7.0"
+
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
@@ -56,12 +63,6 @@ jobs:
           set -euo pipefail
           npm ci
 
-      - name: Run tests
-        shell: bash
-        run: |
-          set -euo pipefail
-          npm test
-
       - name: Typecheck
         shell: bash
         run: |
@@ -74,6 +75,12 @@ jobs:
           set -euo pipefail
           npm run build
           npm run check:split
+
+      - name: Run tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm test
 
       - name: Prepare Cloudflare resources
         shell: bash

@@ -2,6 +2,7 @@
   "name": "worker-ssh",
   "version": "0.1.0",
   "private": true,
+  "packageManager": "npm@11.7.0",
   "type": "module",
   "description": "透過 Cloudflare Worker 提供網頁版 SSH 連線、SFTP、主機監控與連線設定雲同步（Liquid Glass 暗色主題）",
   "scripts": {

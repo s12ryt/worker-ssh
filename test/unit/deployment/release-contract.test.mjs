@@ -50,6 +50,53 @@ test("GitHub Actions 僅允許手動部署並以最小權限執行完整驗證",
   assert.match(workflow, /npm run check:split/);
 });
 
+test("專案與 workflow 在 npm ci 前固定使用 npm 11.7.0", async () => {
+  const [packageJsonText, workflow] = await Promise.all([
+    read("package.json"),
+    read(".github/workflows/deploy-cloudflare.yml"),
+  ]);
+  const packageJson = JSON.parse(packageJsonText);
+
+  assert.equal(packageJson.packageManager, "npm@11.7.0");
+
+  const installIndex = workflow.indexOf("npm install --global npm@11.7.0");
+  const verifyIndex = workflow.indexOf('test "$(npm --version)" = "11.7.0"');
+  const ciIndex = workflow.indexOf("npm ci");
+
+  assert.ok(installIndex >= 0, "workflow 必須安裝 npm 11.7.0");
+  assert.ok(verifyIndex >= 0, "workflow 必須驗證 npm 11.7.0");
+  assert.ok(ciIndex >= 0, "workflow 必須執行 npm ci");
+  assert.ok(installIndex < verifyIndex, "必須先安裝再驗證 npm 版本");
+  assert.ok(verifyIndex < ciIndex, "必須在 npm ci 前驗證 npm 版本");
+});
+
+test("workflow 先建立 Go WASM 與前端產物再執行完整測試", async () => {
+  const workflow = await read(".github/workflows/deploy-cloudflare.yml");
+  const ciIndex = workflow.indexOf("npm ci");
+  const buildIndex = workflow.indexOf("npm run build");
+  const splitIndex = workflow.indexOf("npm run check:split");
+  const testIndex = workflow.indexOf("npm test");
+
+  assert.ok(ciIndex >= 0, "workflow 必須執行 npm ci");
+  assert.ok(buildIndex >= 0, "workflow 必須執行完整 build");
+  assert.ok(splitIndex >= 0, "workflow 必須執行拆包檢查");
+  assert.ok(testIndex >= 0, "workflow 必須執行完整測試");
+  assert.ok(ciIndex < buildIndex, "必須先安裝依賴再建置");
+  assert.ok(buildIndex < splitIndex, "拆包檢查必須在建置之後");
+  assert.ok(splitIndex < testIndex, "必須先產生 Go WASM 與建置產物，再啟動 Worker 測試");
+});
+
+test("Worker 測試使用已提交的最小 assets fixture", async () => {
+  const [wranglerTest, fixture] = await Promise.all([
+    read("wrangler.test.jsonc"),
+    read("test/fixtures/assets/index.html"),
+  ]);
+
+  assert.match(wranglerTest, /"directory": "test\/fixtures\/assets"/);
+  assert.match(fixture, /data-worker-ssh-test-assets/);
+  assert.doesNotMatch(wranglerTest, /"directory": "dist\/client"/);
+});
+
 test("workflow 以 repository secrets 準備資源、部署並無條件清理暫存檔", async () => {
   const workflow = await read(".github/workflows/deploy-cloudflare.yml");
 
