@@ -504,4 +504,5 @@
 - **文件與授權**：新增繁中 `README.md`，說明功能、本機開發、四個 repository secrets、Cloudflare token 最小權限、手動 Run workflow 與不遷移本機資料；新增 MIT License（2026 s12ryt）。
 - **驗證**：deployment tests 17/17；Go PASS；Worker store 21/21；完整 frontend／Worker／Go、typecheck、build、check:split 已通過。以假資源 ID 執行真實 `wrangler deploy --dry-run` 成功，解析 54 個 assets、D1、KV 與兩個 Durable Objects；沒有呼叫 Cloudflare provisioning API或正式部署。
 - **發布結果**：公開 repository 建立於 `https://github.com/s12ryt/worker-ssh`。本輪只推送原始碼與 workflow，不觸發 production deployment；使用者需先在 GitHub Actions secrets 設定 `CLOUDFLARE_API_TOKEN`、`CLOUDFLARE_ACCOUNT_ID`、`PANEL_PASSWORD`、`ENCRYPTION_KEY`。
+- **遠端驗證**：`main` 已成功推送並設為 default branch；GitHub 將 **Deploy to Cloudflare** 辨識為 active workflow。目前 workflow runs 為空，repository secrets 清單為空，證明本輪未觸發部署且待使用者設定四個 secrets。
 - **服務狀態**：依使用者既有要求，本機 Wrangler `http://127.0.0.1:8787` 與 SSH fixture `127.0.0.1:2222` 保持運行，發布流程不讀取或停止本機服務。

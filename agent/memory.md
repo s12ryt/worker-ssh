@@ -342,6 +342,7 @@
 - 公開契約新增README、MIT與ignore規則；秘密掃描只剩example／測試值。Go testserver原固定OpenSSH測試key改為每次用ed25519產生普通與passphrase加密key，Worker store測試改不 resembling PEM的假值。
 - 驗證：deployment17/17、Go PASS、store21/21，完整frontend/Worker/typecheck/build/split此前全綠；真Wrangler假ID dry-run成功且無API/deploy。本輪未執行Cloudflare production。
 - GitHub repository已建立為 `https://github.com/s12ryt/worker-ssh`；以多個小型英文plain-style原子提交組織初始歷史，tests與直接implementation成對提交。
+- 遠端驗證：`main`推送成功並成為default branch；GitHub workflow列為active，run list與repository secret list皆為空。本輪沒有觸發Cloudflare production，四個secrets仍待使用者設定。
 - 教訓：(1)一鍵部署應把resource provisioning與deploy config生成拆成可單元測試的library；(2)公開測試fixture也不能內嵌private-key PEM，即使無真實權限仍可能觸發push protection；(3)workflow secrets應以ephemeral secrets file與always-cleanup處理，不應注入靜態wrangler config；(4)本機資料與正式部署資源必須明確隔離。
 - 服務：本機Wrangler與SSH fixture不受Git初始化、測試或發布影響，依使用者要求保持運行。
 
