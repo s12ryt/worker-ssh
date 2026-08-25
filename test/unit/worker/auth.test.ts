@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  cachedSigningKey,
   createSessionToken,
   parseSessionCookie,
   verifyPanelPassword,
@@ -52,6 +53,24 @@ describe("session token", () => {
     await expect(verifySessionToken("", PASSWORD)).resolves.toBe(false);
     await expect(verifySessionToken("garbage", PASSWORD)).resolves.toBe(false);
     await expect(verifySessionToken("a.b.c", PASSWORD)).resolves.toBe(false);
+  });
+});
+
+describe("cachedSigningKey", () => {
+  it("同 password 重複呼叫回傳同一把金鑰（isolate 內重複 HKDF 衍生成本）", async () => {
+    const a = await cachedSigningKey(PASSWORD);
+    const b = await cachedSigningKey(PASSWORD);
+    expect(b).toBe(a);
+  });
+
+  it("不同 password 取得不同金鑰，且金鑰可作 HMAC 簽章", async () => {
+    const a = await cachedSigningKey(PASSWORD);
+    const b = await cachedSigningKey("another-password");
+    expect(b).not.toBe(a);
+
+    const payload = new TextEncoder().encode("probe");
+    const sig = await crypto.subtle.sign("HMAC", b, payload);
+    expect(await crypto.subtle.verify("HMAC", b, sig, payload)).toBe(true);
   });
 });
 

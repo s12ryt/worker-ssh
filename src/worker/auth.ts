@@ -55,6 +55,22 @@ async function signingKey(password: string): Promise<CryptoKey> {
   );
 }
 
+// 每個 isolate 以密碼為鍵的 HKDF 衍生結果快取：
+// 面板密碼在同一 isolate 生命週期內不變，重複請求免重做 importKey+deriveKey。
+const signingKeyCache = new Map<string, Promise<CryptoKey>>();
+
+/** 取得（或重用）指定面板密碼的 HMAC 簽章金鑰；衍生失敗不快取 */
+export function cachedSigningKey(password: string): Promise<CryptoKey> {
+  const cached = signingKeyCache.get(password);
+  if (cached) return cached;
+  const key = signingKey(password).catch((error: unknown) => {
+    signingKeyCache.delete(password);
+    throw error;
+  });
+  signingKeyCache.set(password, key);
+  return key;
+}
+
 /** 建立 session token */
 export async function createSessionToken(
   password: string,
@@ -62,7 +78,7 @@ export async function createSessionToken(
 ): Promise<{ token: string; expiresAt: number }> {
   const expiresAt = Date.now() + ttlMs;
   const payload = b64url(new TextEncoder().encode(JSON.stringify({ exp: expiresAt })));
-  const key = await signingKey(password);
+  const key = await cachedSigningKey(password);
   const sigBytes = await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(payload));
   return { token: `${payload}.${b64url(new Uint8Array(sigBytes))}`, expiresAt };
 }
@@ -73,7 +89,7 @@ export async function verifySessionToken(token: string, password: string): Promi
   if (parts.length !== 2 || !parts[0] || !parts[1]) return false;
   const [payload, sig] = parts;
   try {
-    const key = await signingKey(password);
+    const key = await cachedSigningKey(password);
     const valid = await crypto.subtle.verify(
       "HMAC",
       key,
