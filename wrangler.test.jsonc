@@ -27,7 +27,7 @@
     { "tag": "v2", "new_sqlite_classes": ["SshQuotaObject"] }
   ],
   "assets": {
-    "directory": "dist/client",
+    "directory": "test/fixtures/assets",
     "binding": "ASSETS"
   }
 }

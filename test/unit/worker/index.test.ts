@@ -1006,4 +1006,10 @@ describe("路由 fallback", () => {
     );
     expect(res.status).toBe(404);
   });
+
+  it("非 API 路徑由已提交的測試 assets fixture 提供", async () => {
+    const res = await SELF.fetch("https://example.com/");
+    expect(res.status).toBe(200);
+    expect(await res.text()).toContain("data-worker-ssh-test-assets");
+  });
 });
