@@ -537,4 +537,5 @@
 - **GREEN與回歸**：目標6檔103/103，另補加密provider安全錯誤HTTP回歸；typecheck與LSP0 diagnostics。clean完整回歸deployment20/20、frontend295/295、Worker145/145、Go PASS、build與check:split PASS。Worker bundle126.5KB、app約122KB、terminal284.9KB。
 - **真實Wrangler驗證**：因主工作區node_modules受仍運行的Wrangler鎖定且熱更新後8787暫時無HTTP回應，未停止既有服務；改以clean worktree在8788啟動隔離Wrangler。登入/bootstrap後folder POST 201、connection POST 201、response無secret欄位、recursive cleanup 204。
 - **相容性邊界**：fresh production D1沒有成功建立的舊加密row。v1/v2可相容讀取程式仍存在，但Cloudflare production無法保證直接解密歷史PBKDF2 210k信封；若未來有此類production資料，需在可支援舊KDF的離線/本機環境先遷移為v3。
+- **推送與服務收尾**：七個原子提交已推送至`main`的`292bcef`，workflow僅手動觸發，push後沒有新增Actions run。隔離8788服務、temp env與worktree已清除。為修復主工作區先前EBUSY留下的不完整`node_modules`，受控停止舊8787後執行真正`npm@11.7.0 ci`與最新build，再以background Wrangler恢復`http://127.0.0.1:8787`；parent PID90728、listener PID76996，HTTP GET實測200。SSH fixture PID27768/2222保持運行。
 - **環境與發布**：本機runtime仍fallback compatibility date 2025-09-06，Windows Miniflare仍有temp EBUSY警告但suite全綠。修復將推送main，依使用者決策不由本輪觸發Cloudflare部署。

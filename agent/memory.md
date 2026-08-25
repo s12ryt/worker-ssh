@@ -366,6 +366,7 @@
 - Migration：KV marker升`migration:connections:v3`，v1/v2都改寫v3；D1 bootstrap不再保留v2。v1/v2 decrypt仍使用歷史PBKDF2210k，只在支援該上限的runtime可讀。
 - API：新增`EncryptionOperationError`/`ENCRYPTION_UNAVAILABLE`，建立folder/host若crypto不可用時不再只顯示`database operation failed`，也不暴露底層例外文字。
 - 驗證：clean worktree目標103/103，另有安全加密錯誤HTTP回歸；完整deployment20/frontend295/Worker145/Go/typecheck/build/split全綠，LSP0 diagnostics。隔離Wrangler8788真實建立folder201、connection201、無secret response、清理204。
-- 主工作區8787保留listener但受先前EBUSY造成的不完整node_modules影響，source watch後HTTP暫時卡住；本輪沒有為驗證停止既有服務，而使用clean worktree的8788臨時實例。後續可在允許停機時重裝node_modules並重啟本機dev server。
+- 推送與清理：七個原子提交已推送至`main`的`292bcef`；workflow只有`workflow_dispatch`，push後Actions沒有新增run。隔離8788程序樹、臨時env與clean worktree均已刪除。
+- 本機服務恢復：受控停止卡住的舊8787後，主工作區真正執行`npm@11.7.0 ci`與最新build，並以background Wrangler重啟。最終`http://127.0.0.1:8787`由parent PID90728/listener PID76996提供服務，GET實測200；SSH fixture PID27768/2222未停止。
 - 教訓：(1) WebCrypto演算法可用不代表所有參數在production/runtime皆同上限，必須加入production-limit回歸；(2)高熵根金鑰適合HKDF，使用者密碼才需要PBKDF2/Argon2等password KDF；(3)一般database error會遮蔽crypto根因，跨層錯誤必須安全但可分類；(4)version marker升級必須同步KV marker、bootstrap與fixture，否則舊complete marker會跳過新遷移。
 
