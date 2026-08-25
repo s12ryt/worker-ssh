@@ -62,7 +62,7 @@ describe("D1ConnectionStore 憑證生命週期", () => {
       .prepare("SELECT payload_envelope FROM connections WHERE id = ?")
       .bind(created.id)
       .first<string>("payload_envelope");
-    expect(raw).toMatch(/^v2:/);
+    expect(raw).toMatch(/^v3:/);
     expect(raw).not.toContain("secret-Alpha");
     expect(raw).not.toContain("alpha.example.test");
   });
@@ -107,7 +107,7 @@ describe("D1ConnectionStore 資料夾結構與計數", () => {
       .prepare("SELECT name_envelope, name_token FROM folders WHERE id = ?")
       .bind(folder.id)
       .first<{ name_envelope: string; name_token: string }>();
-    expect(raw?.name_envelope).toMatch(/^v2:/);
+    expect(raw?.name_envelope).toMatch(/^v3:/);
     expect(JSON.stringify(raw)).not.toContain("Production");
 
     await expect(store.createFolder(" production ")).rejects.toBeInstanceOf(

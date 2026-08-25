@@ -9,7 +9,7 @@ import {
 beforeEach(() => resetKeyCache());
 
 describe("金鑰衍生快取", () => {
-  it("同一 keyMaterial 的多筆 v2 信封只衍生一次金鑰", async () => {
+  it("同一 keyMaterial 的多筆 v3 信封只衍生一次金鑰", async () => {
     const envelopes = [];
     for (let i = 0; i < 24; i += 1) {
       envelopes.push(await encryptString("material-a", `機密資料-${i}`));
