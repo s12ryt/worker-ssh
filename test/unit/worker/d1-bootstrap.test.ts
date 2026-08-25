@@ -6,7 +6,7 @@ import {
   BOOTSTRAP_LEASE_MS,
   LATEST_SCHEMA_VERSION,
 } from "../../../src/worker/d1-bootstrap";
-import { encryptLegacyV1 } from "./crypto-fixtures";
+import { encryptLegacyV1, encryptLegacyV2 } from "./crypto-fixtures";
 
 const KEY = "test-encryption-key";
 
@@ -145,7 +145,7 @@ describe("DatabaseBootstrap", () => {
     expect(preserved).toBe("keep-me");
   });
 
-  it("分批遷移 v1/v2 KV 連線，驗證成功後才清除 conn:*", async () => {
+  it("分批遷移 v1/v2 KV 連線為 v3，驗證成功後才清除 conn:*", async () => {
     const legacy = connection("legacy-one", "舊格式");
     const current = connection("current-two", "新格式");
     await env.KV.put(
@@ -154,7 +154,7 @@ describe("DatabaseBootstrap", () => {
     );
     await env.KV.put(
       `conn:${current.id}`,
-      await encryptString(KEY, JSON.stringify(current)),
+      await encryptLegacyV2(KEY, JSON.stringify(current)),
     );
     await env.KV.put("os:keep-me", JSON.stringify({ os: "linux" }));
 
@@ -183,7 +183,7 @@ describe("DatabaseBootstrap", () => {
       }>();
     expect(rows.results).toHaveLength(2);
     expect(rows.results.every((row) => row.folder_id === null)).toBe(true);
-    expect(rows.results.every((row) => row.payload_envelope.startsWith("v2:"))).toBe(
+    expect(rows.results.every((row) => row.payload_envelope.startsWith("v3:"))).toBe(
       true,
     );
     expect(JSON.stringify(rows.results)).not.toContain("secret-");

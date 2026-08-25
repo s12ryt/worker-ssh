@@ -423,7 +423,7 @@ export class DatabaseBootstrap {
         continue;
       }
       const payload =
-        decrypted.version === "v2"
+        decrypted.version === "v3"
           ? envelope
           : await encryptString(this.encryptionKey, decrypted.plaintext);
       writes.push(
